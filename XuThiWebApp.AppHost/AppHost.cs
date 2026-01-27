@@ -5,12 +5,10 @@ var cache = builder.AddRedis("cache");
 var apiService = builder.AddProject<Projects.XuThiWebApp_ApiService>("apiservice")
     .WithHttpHealthCheck("/health");
 
-builder.AddProject<Projects.XuThiWebApp_Web>("webfrontend")
-    .WithExternalHttpEndpoints()
-    .WithHttpHealthCheck("/health")
-    .WithReference(cache)
-    .WaitFor(cache)
+var frontend = builder.AddJavaScriptApp("xuthi-frontend", "../xuthi-frontend", "dev")
+    .WithNpm().WaitFor(apiService)
     .WithReference(apiService)
-    .WaitFor(apiService);
+    .WithHttpEndpoint(env: "PORT")
+    .WithExternalHttpEndpoints();
 
 builder.Build().Run();
