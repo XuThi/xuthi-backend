@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="XuThiWebApp.ApiService/XuThiWebApp.ApiService.csproj" />
+  <Project Path="XuThiWebApp.AppHost/XuThiWebApp.AppHost.csproj" />
+  <Project Path="XuThiWebApp.ServiceDefaults/XuThiWebApp.ServiceDefaults.csproj" />
+  <Project Path="XuThiWebApp.Web/XuThiWebApp.Web.csproj" />
+</Solution>
