@@ -1,4 +1,14 @@
 <Solution>
+  <Folder Name="/Modules/">
+    <Project Path="Modules/Order/Order.csproj" Id="bb979ecd-d392-4ed3-a0e9-d786a4c71dfb" />
+    <Project Path="Modules/ProductCatalog/ProductCatalog.csproj" Id="e49d5abc-f93a-4ec0-9c82-78684c54007a" />
+  </Folder>
+  <Folder Name="/Shared/">
+    <Project Path="Shared/Contracts/Contracts.csproj" Id="f5e9aed0-fa2b-4fce-9e68-98d9fc8ff872" />
+    <Project Path="Shared/Core/Core.csproj" />
+    <Project Path="Shared/Messaging/Messaging.csproj" Id="4aa5df82-9c93-4f06-8b96-3d2700d5545b" />
+  </Folder>
+  <Project Path="Mediator/Mediator.csproj" Id="6c6575d9-a91a-4fc7-900a-0c41a43970fa" />
   <Project Path="XuThiWebApp.ApiService/XuThiWebApp.ApiService.csproj" />
   <Project Path="XuThiWebApp.AppHost/XuThiWebApp.AppHost.csproj" />
   <Project Path="XuThiWebApp.ServiceDefaults/XuThiWebApp.ServiceDefaults.csproj" />
