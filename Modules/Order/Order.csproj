@@ -6,4 +6,12 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
+    <ProjectReference Include="..\..\Shared\Core\Core.csproj" />
+    <ProjectReference Include="..\Customer\Customer.csproj" />
+    <ProjectReference Include="..\ProductCatalog\ProductCatalog.csproj" />
+    <ProjectReference Include="..\Promotion\Promotion.csproj" />
+  </ItemGroup>
+
 </Project>

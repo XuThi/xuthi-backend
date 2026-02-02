@@ -1,4 +1,4 @@
-﻿using Mediator;
+﻿using MediatR;
 
 namespace Messaging.Events;
 

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ProductCatalog.Infrastructure;
 using ProductCatalog.Infrastructure.Data;
 
 namespace ProductCatalog;
@@ -10,16 +11,26 @@ public static class ProductCatalogModule
     public static IServiceCollection AddProductCatalogModule(this IHostApplicationBuilder builder)
     {
         // Add DbContext with Aspire PostgreSQL integration
-        // This uses the connection string injected by Aspire AppHost
-        builder.AddNpgsqlDbContext<ProductCatalogDbContext>("ProductCatalogDb");
+        builder.AddNpgsqlDbContext<ProductCatalogDbContext>("appdata");
 
         return builder.Services;
     }
 
     public static WebApplication UseProductCatalogModule(this WebApplication app)
     {
-        // Apply migrations automatically in development
-        // For production, you should run migrations separately
+        // Seed data in development
+        if (app.Environment.IsDevelopment())
+        {
+            using var scope = app.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>();
+            
+            // Ensure database is created and apply migrations
+            db.Database.EnsureCreated();
+            
+            // Seed data - runs async but we block for startup
+            ProductCatalogSeeder.SeedAsync(app.Services).GetAwaiter().GetResult();
+        }
+        
         return app;
     }
 }

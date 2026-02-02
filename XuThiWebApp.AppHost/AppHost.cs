@@ -2,14 +2,19 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var cache = builder.AddRedis("cache");
 
-// Add PostgreSQL for ProductCatalog
-var postgres = builder.AddPostgres("postgres")
-    .WithPgAdmin();
+var postgres = builder.AddPostgres("db")
+    .AddDatabase("appdata");
 
-var productCatalogDb = postgres.AddDatabase("ProductCatalogDb");
+// Add Keycloak for authentication with realm import
+// var keycloak = builder.AddKeycloak("keycloak", 8080)
+//     .WithDataVolume()
+//     .WithRealmImport("./keycloak");
 
 var apiService = builder.AddProject<Projects.XuThiWebApp_ApiService>("apiservice")
-    .WithReference(productCatalogDb)
+    .WithReference(postgres)
+    // .WithReference(keycloak)
+    .WaitFor(postgres)
+    // .WaitFor(keycloak)      // Wait for Keycloak too
     .WithHttpHealthCheck("/health");
 
 var frontend = builder.AddJavaScriptApp("xuthi-frontend", "../xuthi-frontend", "dev")

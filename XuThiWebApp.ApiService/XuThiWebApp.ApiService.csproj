@@ -7,12 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Modules\Cart\Cart.csproj" />
+    <ProjectReference Include="..\Modules\Customer\Customer.csproj" />
+    <ProjectReference Include="..\Modules\Order\Order.csproj" />
     <ProjectReference Include="..\Modules\ProductCatalog\ProductCatalog.csproj" />
+    <ProjectReference Include="..\Modules\Promotion\Promotion.csproj" />
     <ProjectReference Include="..\XuThiWebApp.ServiceDefaults\XuThiWebApp.ServiceDefaults.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- <PackageReference Include="Keycloak.AuthServices.Authentication" Version="2.5.3" />
+    <PackageReference Include="Keycloak.AuthServices.Authorization" Version="2.5.3" /> -->
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0-rc.1.25451.107" />
+    <PackageReference Include="Scalar.AspNetCore" Version="1.2.60" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,6 @@
-﻿using FluentValidation;
+﻿using Core.Behaviors;
+using FluentValidation;
+using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 
@@ -12,6 +14,9 @@ public static class MediatRExtensions
         services.AddMediatR(config =>
         {
             config.RegisterServicesFromAssemblies(assemblies);
+            
+            config.AddOpenBehavior(typeof(ValidationBehavior<,>));
+            config.AddOpenBehavior(typeof(TransactionBehavior<,>));
         });
 
         services.AddValidatorsFromAssemblies(assemblies);

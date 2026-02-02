@@ -1,15 +1,20 @@
 ﻿namespace ProductCatalog.Infrastructure.Entity;
 
-internal sealed class DimensionDisplayTypes
+/// <summary>
+/// Display types for variant options (how the frontend should render them)
+/// Don't know why i still keep this tho might delete later
+/// </summary>
+public enum VariantOptionDisplayType
 {
-    // "dropdown", "color", "text", "image", "choice"
-    public const string Text = "text";
-    public const string Color = "color";
-    public const string Image = "image";
-    public const string Dropdown = "dropdown";
-    public const string Choice = "choice";
-
-    public static readonly string[] All = [Text, Color, Image, Dropdown, Choice];
-
-    public static bool Has(string displayType) => All.Contains(displayType);
+    /// <summary>Dropdown selector (Size: 36, 37, 38)</summary>
+    Dropdown = 1,
+    
+    /// <summary>Color swatches (shows actual color)</summary>
+    ColorSwatch = 2,
+    
+    /// <summary>Image thumbnails (different patterns/designs)</summary>
+    ImageSwatch = 3,
+    
+    /// <summary>Radio buttons or pills</summary>
+    Button = 4
 }

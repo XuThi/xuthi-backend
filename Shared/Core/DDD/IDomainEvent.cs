@@ -1,10 +1,10 @@
-﻿using Mediator;
+﻿using MediatR;
 
 namespace Core.DDD;
 
 public interface IDomainEvent : INotification
 {
     Guid EventId => Guid.NewGuid();
-    public DateTime OccurredOn => DateTime.Now;
+    public DateTime OccurredOn => DateTime.UtcNow;
     public string EventType => GetType().AssemblyQualifiedName!;
 }
