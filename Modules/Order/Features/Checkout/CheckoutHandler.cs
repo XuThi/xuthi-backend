@@ -1,9 +1,36 @@
 using Customer.Features.Customers;
+using Customer.Features.Customers.AddCustomerOrder;
 using ProductCatalog.Infrastructure.Data;
 using Promotion.Features.Vouchers;
+using Promotion.Features.Vouchers.ValidateVoucher;
 using Promotion.Infrastructure.Data;
 
 namespace Order.Features.Checkout;
+
+public record CheckoutCommand(CheckoutRequest Request) : ICommand<CheckoutResult>;
+public record CheckoutResult(Guid OrderId, string OrderNumber, decimal Total, string Status);
+public record CheckoutItem(Guid ProductId, Guid VariantId, int Quantity);
+
+public class CheckoutCommandValidator : AbstractValidator<CheckoutCommand>
+{
+    public CheckoutCommandValidator()
+    {
+        RuleFor(x => x.Request.CustomerName).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.Request.CustomerEmail).NotEmpty().EmailAddress();
+        RuleFor(x => x.Request.CustomerPhone).NotEmpty().MaximumLength(20);
+        RuleFor(x => x.Request.ShippingAddress).NotEmpty().MaximumLength(500);
+        RuleFor(x => x.Request.ShippingCity).NotEmpty();
+        RuleFor(x => x.Request.ShippingDistrict).NotEmpty();
+        RuleFor(x => x.Request.ShippingWard).NotEmpty();
+        RuleFor(x => x.Request.Items).NotEmpty().WithMessage("Cart cannot be empty");
+        RuleForEach(x => x.Request.Items).ChildRules(item =>
+        {
+            item.RuleFor(i => i.ProductId).NotEmpty();
+            item.RuleFor(i => i.VariantId).NotEmpty();
+            item.RuleFor(i => i.Quantity).GreaterThan(0);
+        });
+    }
+}
 
 internal class CheckoutHandler(
     OrderDbContext orderDb,

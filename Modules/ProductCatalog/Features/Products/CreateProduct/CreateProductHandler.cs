@@ -1,0 +1,146 @@
+﻿using Microsoft.AspNetCore.Http;
+
+namespace ProductCatalog.Features.Products.CreateProduct;
+
+public record CreateProductRequest(
+    string Name,
+    string Description,
+    Guid CategoryId,
+    Guid BrandId,
+    bool IsActive = true,
+    List<CreateVariantInput>? Variants = null
+);
+
+public record CreateVariantInput(
+    string Sku,
+    string? BarCode,
+    decimal Price,
+    string? Description,
+    bool IsActive = true,
+    List<OptionSelectionInput>? OptionSelections = null
+);
+
+public record OptionSelectionInput(string VariantOptionId, string Value);
+
+public record CreateProductCommand(CreateProductRequest Request, List<IFormFile>? Images = null) : ICommand<CreateProductResult>;
+public record CreateProductResult(Guid Id, List<Guid> VariantIds, List<string> ImageUrls);
+
+public class CreateProductCommandValidator : AbstractValidator<CreateProductCommand>
+{
+    public CreateProductCommandValidator()
+    {
+        RuleFor(x => x.Request.Name).NotEmpty().WithMessage("Name is required");
+        RuleFor(x => x.Request.Description).NotEmpty().WithMessage("Description is required");
+        RuleFor(x => x.Request.CategoryId).NotEmpty().WithMessage("CategoryId is required");
+        RuleFor(x => x.Request.BrandId).NotEmpty().WithMessage("BrandId is required");
+    }
+}
+
+internal class CreateProductHandler(ProductCatalogDbContext dbContext)
+    : ICommandHandler<CreateProductCommand, CreateProductResult>
+{
+    private static readonly string[] AllowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+    
+    public async Task<CreateProductResult> Handle(CreateProductCommand command, CancellationToken cancellationToken)
+    {
+        var request = command.Request;
+
+        var product = new Product
+        {
+            Id = Guid.NewGuid(),
+            Name = request.Name,
+            UrlSlug = GenerateSlug(request.Name),
+            Description = request.Description,
+            CategoryId = request.CategoryId,
+            BrandId = request.BrandId,
+            IsActive = request.IsActive,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        // Create variants if provided
+        var variantIds = new List<Guid>();
+        if (request.Variants?.Count > 0)
+        {
+            foreach (var vr in request.Variants)
+            {
+                var variant = new Variant
+                {
+                    Id = Guid.NewGuid(),
+                    ProductId = product.Id,
+                    Sku = vr.Sku,
+                    BarCode = vr.BarCode ?? vr.Sku, // Default barcode to SKU
+                    Price = vr.Price,
+                    Description = vr.Description ?? "",
+                    IsActive = vr.IsActive,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                // Add option selections (e.g., Size=38)
+                if (vr.OptionSelections?.Count > 0)
+                {
+                    variant.OptionSelections = vr.OptionSelections.Select(os => new VariantOptionSelection
+                    {
+                        VariantId = variant.Id,
+                        VariantOptionId = os.VariantOptionId,
+                        Value = os.Value
+                    }).ToList();
+                }
+
+                product.Variants.Add(variant);
+                variantIds.Add(variant.Id);
+            }
+        }
+
+        // Upload images if provided (store URL only for now - Cloudinary integration later)
+        var imageUrls = new List<string>();
+        if (command.Images?.Count > 0)
+        {
+            var sortOrder = 0;
+            foreach (var file in command.Images)
+            {
+                var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+                if (!AllowedExtensions.Contains(extension))
+                    continue;
+
+                // TODO: Replace with Cloudinary upload
+                // For now, we'll store a placeholder URL
+                var imageId = Guid.NewGuid();
+                var placeholderUrl = $"/uploads/products/{imageId}{extension}";
+                
+                var image = new Image
+                {
+                    Id = imageId,
+                    Url = placeholderUrl,
+                    CloudinaryPublicId = null, // Will be set when Cloudinary is integrated
+                    AltText = product.Name
+                };
+
+                dbContext.Images.Add(image);
+                product.Images.Add(new ProductImage
+                {
+                    Id = Guid.NewGuid(),
+                    ProductId = product.Id,
+                    ImageId = image.Id,
+                    SortOrder = sortOrder++
+                });
+
+                imageUrls.Add(placeholderUrl);
+            }
+        }
+
+        dbContext.Products.Add(product);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return new CreateProductResult(product.Id, variantIds, imageUrls);
+    }
+
+    private static string GenerateSlug(string name)
+    {
+        return name.ToLowerInvariant()
+            .Replace(" ", "-")
+            .Replace(".", "")
+            .Replace(",", "");
+    }
+}

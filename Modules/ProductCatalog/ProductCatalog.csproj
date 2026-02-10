@@ -20,8 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Features\DeleteProduct\" />
-    <Folder Include="Features\UpdateProduct\" />
+    <Folder Include="Features\Products\DeleteProduct\" />
+    <Folder Include="Features\Products\UpdateProduct\" />
     <Folder Include="EventHandlers\" />
   </ItemGroup>
 

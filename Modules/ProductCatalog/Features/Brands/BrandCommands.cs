@@ -22,7 +22,6 @@ public record UpdateBrandRequest(
 
 // ============== DELETE ==============
 public record DeleteBrandCommand(Guid Id) : ICommand<bool>;
-
 // ============== RESULT ==============
 public record BrandResult(
     Guid Id,

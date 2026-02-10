@@ -1,0 +1,24 @@
+﻿namespace ProductCatalog.Features.Brands.CreateBrand;
+
+public record CreateBrandRequest(string Name, string UrlSlug, string? Description, string? LogoUrl);
+public record CreateBrandResponse(Guid Id, string Name, string UrlSlug, string? Description, string? LogoUrl);
+
+public class CreateBrandEndpoint : ICarterModule
+{
+    public void AddRoutes(IEndpointRouteBuilder app)
+    {
+        app.MapPost("/api/brands", async (CreateBrandRequest request, ISender sender) =>
+        {
+            var command = request.Adapt<CreateBrandCommand>();
+            var result = await sender.Send(command);
+            return Results.Created($"/api/brands/{result.Id}", result);
+        })
+        .WithName("CreateBrand")
+        .Produces<CreateBrandResult>(StatusCodes.Status201Created)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .WithSummary("Create Brand")
+        .WithDescription("Create a new brand")
+        .WithTags("Brands")
+        .RequireAuthorization("Staff");
+    }
+}

@@ -1,5 +1,6 @@
 global using MediatR;
 global using Carter;
+global using Mapster;
 global using FluentValidation;
 global using Microsoft.EntityFrameworkCore;
 global using Microsoft.AspNetCore.Builder;

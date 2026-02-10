@@ -61,6 +61,25 @@ public static class ProductCatalogSeeder
         };
         db.VariantOptions.Add(sizeOption);
         
+        // Seed VariantOption: Color
+        var colorOption = new VariantOption
+        {
+            Id = "color",
+            Name = "Màu sắc",
+            DisplayType = "color",
+            DefaultValue = "Đen",
+            Values =
+            [
+                new VariantOptionValue { Id = Guid.NewGuid(), VariantOptionId = "color", Value = "Đen", DisplayValue = "Đen", SortOrder = 1 },
+                new VariantOptionValue { Id = Guid.NewGuid(), VariantOptionId = "color", Value = "Trắng", DisplayValue = "Trắng", SortOrder = 2 },
+                new VariantOptionValue { Id = Guid.NewGuid(), VariantOptionId = "color", Value = "Đỏ", DisplayValue = "Đỏ", SortOrder = 3 },
+                new VariantOptionValue { Id = Guid.NewGuid(), VariantOptionId = "color", Value = "Hồng", DisplayValue = "Hồng", SortOrder = 4 },
+                new VariantOptionValue { Id = Guid.NewGuid(), VariantOptionId = "color", Value = "Be", DisplayValue = "Be", SortOrder = 5 },
+            ]
+        };
+        db.VariantOptions.Add(colorOption);
+
+        
         // Product seed data from TypeScript
         var products = GetProductSeedData();
         

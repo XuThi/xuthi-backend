@@ -2,6 +2,20 @@ using ProductCatalog.Infrastructure.Data;
 
 namespace Order.Features.UpdateOrderStatus;
 
+public record UpdateOrderStatusCommand(
+    Guid OrderId,
+    OrderStatus NewStatus,
+    string? Reason = null
+) : ICommand<UpdateOrderStatusResult>;
+
+public record UpdateOrderStatusResult(
+    Guid OrderId,
+    string OrderNumber,
+    string PreviousStatus,
+    string NewStatus,
+    DateTime UpdatedAt
+);
+
 internal class UpdateOrderStatusHandler(
     OrderDbContext orderDb,
     ProductCatalogDbContext catalogDb)
