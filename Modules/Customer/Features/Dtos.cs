@@ -6,7 +6,7 @@ namespace Customer.Features.Customers;
 
 public record CustomerDto(
     Guid Id,
-    string KeycloakUserId,
+    string ExternalUserId,
     string Email,
     string? FullName,
     string? Phone,
@@ -20,7 +20,7 @@ public record CustomerDto(
 
 public record CustomerDetailDto(
     Guid Id,
-    string KeycloakUserId,
+    string ExternalUserId,
     string Email,
     string? FullName,
     string? Phone,

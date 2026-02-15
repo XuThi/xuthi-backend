@@ -5,5 +5,6 @@ global using Microsoft.EntityFrameworkCore;
 global using Microsoft.AspNetCore.Builder;
 global using Microsoft.AspNetCore.Http;
 global using Microsoft.AspNetCore.Routing;
-global using Microsoft.Extensions.DependencyInjection;
 global using Contracts.CQRS;
+global using Promotion.Infrastructure.Entity;
+global using Promotion.Infrastructure.Data;

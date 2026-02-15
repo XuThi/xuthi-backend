@@ -58,6 +58,17 @@ internal class CheckoutHandler(
             .Where(p => productIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, cancellationToken);
 
+        var optionIds = variants
+            .SelectMany(v => v.OptionSelections.Select(os => os.VariantOptionId))
+            .Distinct()
+            .ToList();
+
+        var optionNameMap = optionIds.Count == 0
+            ? new Dictionary<string, string>()
+            : await catalogDb.VariantOptions
+                .Where(vo => optionIds.Contains(vo.Id))
+                .ToDictionaryAsync(vo => vo.Id, vo => vo.Name, cancellationToken);
+
         // Validate all items exist
         var orderItems = new List<OrderItem>();
         decimal subtotal = 0;
@@ -72,14 +83,25 @@ internal class CheckoutHandler(
             if (product is null)
                 throw new InvalidOperationException($"Product {item.ProductId} not found");
 
-            var itemTotal = variant.Price * item.Quantity;
+            var (unitPrice, compareAtPrice) = await ResolveSalePrice(
+                promotionDb,
+                product.Id,
+                variant.Id,
+                variant.Price,
+                cancellationToken);
+
+            var itemTotal = unitPrice * item.Quantity;
             subtotal += itemTotal;
 
             // Get first image URL
             var imageUrl = product.Images.OrderBy(i => i.SortOrder).FirstOrDefault()?.Image.Url;
 
             // Build variant description from option selections
-            var variantDesc = string.Join(", ", variant.OptionSelections.Select(os => os.Value));
+            var variantDesc = string.Join(", ", variant.OptionSelections.Select(os =>
+            {
+                var name = optionNameMap.TryGetValue(os.VariantOptionId, out var n) ? n : os.VariantOptionId;
+                return $"{name}: {os.Value}";
+            }));
 
             orderItems.Add(new OrderItem
             {
@@ -90,8 +112,8 @@ internal class CheckoutHandler(
                 VariantSku = variant.Sku,
                 VariantDescription = variantDesc,
                 ImageUrl = imageUrl,
-                UnitPrice = variant.Price,
-                CompareAtPrice = null, // Simplified - no compare price
+                UnitPrice = unitPrice,
+                CompareAtPrice = compareAtPrice,
                 Quantity = item.Quantity,
                 TotalPrice = itemTotal
             });
@@ -202,5 +224,35 @@ internal class CheckoutHandler(
         var date = DateTime.UtcNow.ToString("yyyyMMdd");
         var random = new Random().Next(1000, 9999);
         return $"XT-{date}-{random}";
+    }
+
+    private static async Task<(decimal UnitPrice, decimal? CompareAtPrice)> ResolveSalePrice(
+        PromotionDbContext promotionDb,
+        Guid productId,
+        Guid variantId,
+        decimal basePrice,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var saleItem = await promotionDb.SaleCampaignItems
+            .Include(i => i.SaleCampaign)
+            .Where(i => i.ProductId == productId && (i.VariantId == null || i.VariantId == variantId))
+            .Where(i => i.SaleCampaign.IsActive && i.SaleCampaign.StartDate <= now && i.SaleCampaign.EndDate >= now)
+            .OrderByDescending(i => i.VariantId.HasValue)
+            .ThenBy(i => i.SalePrice)
+            .FirstOrDefaultAsync(ct);
+
+        if (saleItem is null)
+        {
+            return (basePrice, null);
+        }
+
+        var original = saleItem.OriginalPrice ?? basePrice;
+        if (original < saleItem.SalePrice)
+        {
+            original = basePrice;
+        }
+
+        return (saleItem.SalePrice, original);
     }
 }

@@ -1,6 +1,7 @@
 ﻿using Cart.Infrastructure.Data;
 using Cart.Infrastructure.Entity;
 using ProductCatalog.Infrastructure.Data;
+using Promotion.Infrastructure.Data;
 
 namespace Cart.Features.UpdateCartItem;
 
@@ -10,7 +11,7 @@ public record UpdateCartItemResult(bool Success, CartDto? Cart, string? ErrorMes
 /// <summary>
 /// Update cart item quantity
 /// </summary>
-internal class UpdateCartItemHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb)
+internal class UpdateCartItemHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb, PromotionDbContext promotionDb)
     : ICommandHandler<UpdateCartItemCommand, UpdateCartItemResult>
 {
     public async Task<UpdateCartItemResult> Handle(UpdateCartItemCommand cmd, CancellationToken ct)
@@ -42,8 +43,13 @@ internal class UpdateCartItemHandler(CartDbContext cartDb, ProductCatalogDbConte
         {
             item.Quantity = cmd.Quantity;
             item.AvailableStock = 10; // Default stock
-            item.UnitPrice = variant.Price; // Update to current price
-            item.CompareAtPrice = null;
+            var (unitPrice, compareAtPrice) = await ResolveSalePrice(
+                item.ProductId,
+                item.VariantId,
+                variant.Price,
+                ct);
+            item.UnitPrice = unitPrice;
+            item.CompareAtPrice = compareAtPrice;
             item.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -63,4 +69,33 @@ internal class UpdateCartItemHandler(CartDbContext cartDb, ProductCatalogDbConte
         )).ToList(),
         cart.Subtotal, cart.VoucherDiscount, cart.AppliedVoucherCode, cart.Total, cart.TotalItems
     );
+
+    private async Task<(decimal UnitPrice, decimal? CompareAtPrice)> ResolveSalePrice(
+        Guid productId,
+        Guid variantId,
+        decimal basePrice,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var saleItem = await promotionDb.SaleCampaignItems
+            .Include(i => i.SaleCampaign)
+            .Where(i => i.ProductId == productId && (i.VariantId == null || i.VariantId == variantId))
+            .Where(i => i.SaleCampaign.IsActive && i.SaleCampaign.StartDate <= now && i.SaleCampaign.EndDate >= now)
+            .OrderByDescending(i => i.VariantId.HasValue)
+            .ThenBy(i => i.SalePrice)
+            .FirstOrDefaultAsync(ct);
+
+        if (saleItem is null)
+        {
+            return (basePrice, null);
+        }
+
+        var original = saleItem.OriginalPrice ?? basePrice;
+        if (original < saleItem.SalePrice)
+        {
+            original = basePrice;
+        }
+
+        return (saleItem.SalePrice, original);
+    }
 }

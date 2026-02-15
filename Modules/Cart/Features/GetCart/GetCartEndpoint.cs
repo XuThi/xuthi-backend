@@ -20,6 +20,7 @@ public class GetCartEndpoint : ICarterModule
             return Results.Ok(response);
         })
         .Produces<GetCartResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithTags("Shopping Cart")
         .WithSummary("Get shopping cart")
         .WithDescription("Get cart by sessionId (anonymous), customerId (logged in), or cartId (direct Guid)");

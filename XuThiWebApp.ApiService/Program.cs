@@ -21,6 +21,8 @@ using Promotion.Infrastructure.Data;
 using Scalar.AspNetCore;
 using System.Text;
 using Identity.Infrastructure.Services;
+using Promotion.Infrastructure;
+using ProductCatalog.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -150,10 +152,13 @@ if (app.Environment.IsDevelopment())
     await scope.ServiceProvider.GetRequiredService<IdentityDbContext>().Database.MigrateAsync();
     
     // Seed initial product data
-    await ProductCatalog.Infrastructure.ProductCatalogSeeder.SeedAsync(app.Services);
+    await ProductCatalogSeeder.SeedAsync(app.Services);
     
     // Seed roles and admin user
     await IdentitySeeder.SeedRolesAndAdminAsync(app.Services);
+
+    // Seed promotions/vouchers for testing
+    await PromotionSeeder.SeedAsync(app.Services);
 }
 
 // Configure the HTTP request pipeline.

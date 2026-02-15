@@ -13,9 +13,14 @@ public class RemoveVoucherEndpoint : ICarterModule
             var command = new RemoveVoucherCommand(cartId);
             
             var result = await sender.Send(command);
-            
-            return result.Success ? Results.Ok(result.Cart) : Results.NotFound();
+
+            var response = new RemoveVoucherResponse(result.Success, result.Cart);
+
+            return result.Success ? Results.Ok(response) : Results.NotFound();
         })
+        .Produces<RemoveVoucherResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Shopping Cart")
         .WithSummary("Remove voucher from cart");
     }

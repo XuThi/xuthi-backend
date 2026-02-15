@@ -1,7 +1,6 @@
 ﻿
 namespace ProductCatalog.Features.Brands.DeleteBrand;
 
-public record DeleteBrandCommand(Guid Id) : ICommand<bool>;
 public record DeleteBrandResponse(bool isSuccess);
 
 public class DeleteBrandEndpoint : ICarterModule
@@ -11,11 +10,12 @@ public class DeleteBrandEndpoint : ICarterModule
         app.MapDelete("/api/brands/{id:guid}", async (Guid id, ISender sender) =>
         {
             var command = new DeleteBrandCommand(id);
-            await sender.Send(command);
-            return Results.NoContent();
+            var result = await sender.Send(command);
+            var response = new DeleteBrandResponse(result);
+            return Results.Ok(response);
         })
         .WithName("DeleteBrand")
-        .Produces(StatusCodes.Status204NoContent)
+        .Produces<DeleteBrandResponse>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Delete Brand")

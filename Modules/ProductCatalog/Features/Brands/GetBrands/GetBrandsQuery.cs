@@ -1,1 +1,0 @@
-namespace ProductCatalog.Features.Brands.GetBrands;

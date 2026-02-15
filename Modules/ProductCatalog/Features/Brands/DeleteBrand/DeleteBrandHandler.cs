@@ -4,6 +4,8 @@ using System.Text;
 
 namespace ProductCatalog.Features.Brands.DeleteBrand;
 
+public record DeleteBrandCommand(Guid Id) : ICommand<bool>;
+
 internal class DeleteBrandHandler(ProductCatalogDbContext dbContext)
     : ICommandHandler<DeleteBrandCommand, bool>
 {

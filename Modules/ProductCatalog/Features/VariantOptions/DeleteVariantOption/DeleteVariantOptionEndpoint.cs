@@ -11,6 +11,7 @@ public class DeleteVariantOptionEndpoint : ICarterModule
         })
         .WithName("DeleteVariantOption")
         .Produces(StatusCodes.Status204NoContent)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Delete Variant Option")
         .WithDescription("Delete a variant option definition")

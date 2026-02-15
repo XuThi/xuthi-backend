@@ -25,6 +25,10 @@ public class UpdateCartItemEndpoint : ICarterModule
                 ? Results.Ok(response)
                 : Results.BadRequest(response);
         })
+        .Produces<UpdateCartItemResponse>(StatusCodes.Status200OK)
+        .Produces<UpdateCartItemResponse>(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Shopping Cart")
         .WithSummary("Update item quantity")
         .WithDescription("Update quantity of item in cart. Set to 0 to remove.");

@@ -23,7 +23,7 @@ internal class GetCustomerHandler(CustomerDbContext db)
     }
 
     private static CustomerDetailDto MapToDetailDto(CustomerProfile c) => new(
-        c.Id, c.KeycloakUserId, c.Email, c.FullName, c.Phone,
+        c.Id, c.ExternalUserId, c.Email, c.FullName, c.Phone,
         c.DateOfBirth, c.Gender, c.Tier, c.LoyaltyPoints, c.TotalSpent, c.TotalOrders,
         c.TierDiscountPercentage, c.AcceptsMarketing, c.AcceptsSms,
         c.CreatedAt, c.LastLoginAt, c.LastOrderAt,

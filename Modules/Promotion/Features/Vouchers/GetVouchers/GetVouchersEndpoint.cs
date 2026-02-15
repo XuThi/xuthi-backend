@@ -1,5 +1,7 @@
 namespace Promotion.Features.Vouchers.GetVouchers;
 
+public record GetVouchersRequest(bool IsActive = false, bool ValidOnly = false);
+
 // Response
 public record GetVouchersResponse(List<VoucherDto> Vouchers);
 
@@ -9,16 +11,19 @@ public class GetVouchersEndpoint : ICarterModule
     public void AddRoutes(IEndpointRouteBuilder app)
     {
         app.MapGet("/api/vouchers", async (
-            [AsParameters] bool isActive,
-            [AsParameters] bool validOnly,
+            [AsParameters] GetVouchersRequest request,
             ISender sender) =>
         {
-            var query = new GetVouchersQuery(isActive, validOnly);
+            var query = new GetVouchersQuery(request.IsActive, request.ValidOnly);
             
             var result = await sender.Send(query);
-            
-            return Results.Ok(result.Vouchers);
+
+            var response = new GetVouchersResponse(result.Vouchers);
+
+            return Results.Ok(response);
         })
+        .Produces<GetVouchersResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithTags("Vouchers")
         .WithSummary("Get all vouchers")
         .WithDescription("Filter by isActive and validOnly")

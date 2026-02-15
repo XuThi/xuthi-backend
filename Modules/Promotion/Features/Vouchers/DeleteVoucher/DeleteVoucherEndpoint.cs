@@ -1,5 +1,7 @@
 namespace Promotion.Features.Vouchers.DeleteVoucher;
 
+public record DeleteVoucherResponse(bool Success);
+
 // Endpoint
 public class DeleteVoucherEndpoint : ICarterModule
 {
@@ -10,9 +12,14 @@ public class DeleteVoucherEndpoint : ICarterModule
             var command = new DeleteVoucherCommand(id);
             
             var result = await sender.Send(command);
-            
-            return result.Success ? Results.NoContent() : Results.NotFound();
+
+            var response = new DeleteVoucherResponse(result.Success);
+
+            return result.Success ? Results.Ok(response) : Results.NotFound();
         })
+        .Produces<DeleteVoucherResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Vouchers")
         .WithSummary("Delete voucher")
         .RequireAuthorization("Admin");

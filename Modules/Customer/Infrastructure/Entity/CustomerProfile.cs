@@ -1,17 +1,13 @@
 namespace Customer.Infrastructure.Entity;
 
 /// <summary>
-/// Customer profile linked to Keycloak user.
+/// Customer profile linked to an external auth provider user.
 /// Stores app-specific data like tier, points, addresses.
 /// </summary>
 public class CustomerProfile
 {
     public Guid Id { get; set; }
-    
-    // Link to Keycloak
-    public string KeycloakUserId { get; set; } = default!; // Subject ID from Keycloak JWT
-    
-    // Basic info (can be synced from Keycloak or edited independently)
+    public string ExternalUserId { get; set; } = default!;
     public string Email { get; set; } = default!;
     public string? FullName { get; set; }
     public string? Phone { get; set; }

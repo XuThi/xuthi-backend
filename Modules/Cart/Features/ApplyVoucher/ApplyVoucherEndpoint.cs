@@ -28,6 +28,10 @@ public class ApplyVoucherEndpoint : ICarterModule
                 ? Results.Ok(response)
                 : Results.BadRequest(response);
         })
+        .Produces<ApplyVoucherResponse>(StatusCodes.Status200OK)
+        .Produces<ApplyVoucherResponse>(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Shopping Cart")
         .WithSummary("Apply voucher to cart")
         .WithDescription("Validates and applies voucher discount");

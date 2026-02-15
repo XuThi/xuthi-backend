@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using ProductCatalog.Features.VariantOptions.GetVariantOptions;
 
 namespace ProductCatalog.Features.VariantOptions.UpdateVariantOption;
@@ -23,24 +24,36 @@ internal class UpdateVariantOptionHandler(ProductCatalogDbContext dbContext)
 
         if (request.Values != null)
         {
-            // Simple replace logic for now - clear and re-add
-            // Ideally we should merge/update to preserve IDs if referenced, but Values are just strings + generated IDs
-            // For now, let's keep it simple: clear old values, add new ones.
-            // CAUTION: If VariantOptionSelection references VariantOptionValue by ID, this breaks referential integrity.
-            // Checking VariantOptionSelection... it references VariantOptionId + Value (string).
-            // VariantOptionSelection.cs: public string VariantOptionId { get; set; } public string Value { get; set; }
-            // So creating new VariantOptionValue records is safe as long as the string Value matches.
-            
-            option.Values.Clear();
-            int sortOrder = 0;
-            foreach (var val in request.Values)
+            var normalized = request.Values
+                .Select(v => v.Trim())
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Detach tracked values to avoid concurrency conflicts, then hard-delete by option id.
+            if (option.Values.Count > 0)
             {
+                foreach (var existing in option.Values)
+                {
+                    dbContext.Entry(existing).State = EntityState.Detached;
+                }
+                option.Values.Clear();
+            }
+
+            await dbContext.Database.ExecuteSqlRawAsync(
+                "DELETE FROM \"VariantOptionValues\" WHERE \"VariantOptionId\" = {0}",
+                option.Id);
+
+            for (var i = 0; i < normalized.Count; i++)
+            {
+                var value = normalized[i];
                 option.Values.Add(new VariantOptionValue
                 {
                     Id = Guid.NewGuid(),
                     VariantOptionId = option.Id,
-                    Value = val,
-                    SortOrder = sortOrder++
+                    Value = value,
+                    DisplayValue = value,
+                    SortOrder = i
                 });
             }
         }

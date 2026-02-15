@@ -14,6 +14,7 @@ public class UpdateVariantOptionEndpoint : ICarterModule
         })
         .WithName("UpdateVariantOption")
         .Produces<VariantOptionResult>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Update Variant Option")
         .WithDescription("Update a variant option definition")

@@ -27,6 +27,9 @@ public class AddAddressEndpoint : ICarterModule
                 request.SetAsDefault));
             return Results.Created($"/api/customers/{customerId}/addresses/{result.AddressId}", new AddAddressResponse(result.AddressId));
         })
+        .Produces<AddAddressResponse>(StatusCodes.Status201Created)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Customer Addresses")
         .WithSummary("Add new address");
         // TODO: .RequireAuthorization()

@@ -43,7 +43,7 @@ public class CheckoutEndpoint : ICarterModule
             return Results.Created($"/api/orders/{result.OrderId}", response);
         })
         .WithName("Checkout")
-        .Produces<CheckoutResult>(StatusCodes.Status201Created)
+        .Produces<CheckoutResponse>(StatusCodes.Status201Created)
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithSummary("Checkout")
         .WithDescription("Create a new order from cart")

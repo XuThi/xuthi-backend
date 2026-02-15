@@ -1,8 +1,11 @@
 ﻿using System.Text.Json;
+using Mapster;
 
 namespace ProductCatalog.Features.Products.CreateProduct;
 
 // TODO: I will fuck this shit up later
+
+public record CreateProductResponse(Guid Id, List<Guid> VariantIds, List<string> ImageUrls);
 
 public class CreateProductEndpoint : ICarterModule
 {
@@ -49,10 +52,11 @@ public class CreateProductEndpoint : ICarterModule
 
             var command = new CreateProductCommand(request, images);
             var result = await sender.Send(command);
-            return Results.Created($"/api/products/{result.Id}", result);
+            var response = result.Adapt<CreateProductResponse>();
+            return Results.Created($"/api/products/{result.Id}", response);
         })
         .WithName("CreateProduct")
-        .Produces<CreateProductResult>(StatusCodes.Status201Created)
+        .Produces<CreateProductResponse>(StatusCodes.Status201Created)
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithSummary("Create Product")
         .WithDescription("Create a new product. Supports both 'application/json' and 'multipart/form-data' (for images). For multipart, send JSON in 'data' field and files in 'images' field.")

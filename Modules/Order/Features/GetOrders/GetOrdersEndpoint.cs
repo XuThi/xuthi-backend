@@ -32,9 +32,10 @@ public class GetOrdersEndpoint : ICarterModule
 
             var response = result.Adapt<GetOrdersResponse>();
 
-            return Results.Ok(result);
+            return Results.Ok(response);
         })
         .Produces<GetOrdersResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithName("GetOrders")
         .WithSummary("Get Orders")
         .WithDescription("Get all orders with optional filters")

@@ -1,6 +1,18 @@
 using System.Text.Json;
+using Mapster;
 
 namespace ProductCatalog.Features.Products.UpdateProduct;
+
+public record UpdateProductResponse(
+    Guid Id,
+    string Name,
+    string UrlSlug,
+    string Description,
+    Guid CategoryId,
+    Guid BrandId,
+    bool IsActive,
+    DateTime UpdatedAt,
+    List<string> ImageUrls);
 
 public class UpdateProductEndpoint : ICarterModule
 {
@@ -11,10 +23,12 @@ public class UpdateProductEndpoint : ICarterModule
         {
             var command = new UpdateProductCommand(id, request);
             var result = await sender.Send(command);
-            return Results.Ok(result);
+            var response = result.Adapt<UpdateProductResponse>();
+            return Results.Ok(response);
         })
         .WithName("UpdateProduct")
-        .Produces<UpdateProductResult>(StatusCodes.Status200OK)
+        .Produces<UpdateProductResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Update Product")
         .WithDescription("Update product details (JSON, no file uploads)")
@@ -49,10 +63,12 @@ public class UpdateProductEndpoint : ICarterModule
 
             var command = new UpdateProductCommand(id, request, images, removeImageIds);
             var result = await sender.Send(command);
-            return Results.Ok(result);
+            var response = result.Adapt<UpdateProductResponse>();
+            return Results.Ok(response);
         })
         .WithName("UpdateProductWithImages")
-        .Produces<UpdateProductResult>(StatusCodes.Status200OK)
+        .Produces<UpdateProductResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Update Product with Images")
         .WithDescription("Update product details with file uploads via multipart/form-data. Send product data as JSON in 'data' field, new images in 'images' field, and image IDs to remove in 'removeImageIds' field.")

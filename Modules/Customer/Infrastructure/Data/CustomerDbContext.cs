@@ -17,9 +17,9 @@ public class CustomerDbContext : DbContext
         modelBuilder.Entity<CustomerProfile>(entity =>
         {
             entity.HasKey(c => c.Id);
-            entity.HasIndex(c => c.KeycloakUserId).IsUnique();
+            entity.HasIndex(c => c.ExternalUserId).IsUnique();
             entity.HasIndex(c => c.Email);
-            entity.Property(c => c.KeycloakUserId).HasMaxLength(100).IsRequired();
+            entity.Property(c => c.ExternalUserId).HasMaxLength(100).IsRequired();
             entity.Property(c => c.Email).HasMaxLength(256).IsRequired();
             entity.Property(c => c.FullName).HasMaxLength(200);
             entity.Property(c => c.Phone).HasMaxLength(20);

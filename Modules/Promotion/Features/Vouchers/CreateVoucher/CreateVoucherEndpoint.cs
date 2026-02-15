@@ -16,6 +16,8 @@ public class CreateVoucherEndpoint : ICarterModule
             
             return Results.Created($"/api/vouchers/{result.Id}", new CreateVoucherResponse(result.Id));
         })
+        .Produces<CreateVoucherResponse>(StatusCodes.Status201Created)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithTags("Vouchers")
         .WithSummary("Create new voucher")
         .RequireAuthorization("Admin");

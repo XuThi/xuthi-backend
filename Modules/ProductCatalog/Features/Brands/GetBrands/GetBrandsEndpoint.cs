@@ -1,7 +1,7 @@
-namespace ProductCatalog.Features.Brands.GetBrands;
+using Mapster;
 
-public record GetBrandsQuery() : IQuery<GetBrandsResult>;
-public record GetBrandsResult(List<BrandItem> Brands);
+namespace ProductCatalog.Features.Brands.GetBrands;
+public record GetBrandsResponse(List<BrandItem> Brands);
 
 
 public class GetBrandsEndpoint : ICarterModule
@@ -12,10 +12,12 @@ public class GetBrandsEndpoint : ICarterModule
         {
             var query = new GetBrandsQuery();
             var result = await sender.Send(query);
-            return Results.Ok(result);
+            var response = result.Adapt<GetBrandsResponse>();
+            return Results.Ok(response);
         })
         .WithName("GetBrands")
-        .Produces<GetBrandsResult>(StatusCodes.Status200OK)
+        .Produces<GetBrandsResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithSummary("Get All Brands")
         .WithDescription("Get all brands")
         .WithTags("Brands");

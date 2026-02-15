@@ -18,6 +18,9 @@ public class SyncCartPricesEndpoint : ICarterModule
             
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })
+        .Produces<SyncCartPricesResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Shopping Cart")
         .WithSummary("Sync cart with catalog")
         .WithDescription("Updates prices and stock availability from ProductCatalog. Call before checkout.");

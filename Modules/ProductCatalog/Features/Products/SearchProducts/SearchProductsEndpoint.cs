@@ -1,4 +1,8 @@
+using Mapster;
+
 namespace ProductCatalog.Features.Products.SearchProducts;
+
+public record SearchProductsResponse(List<ProductSearchItem> Products, int TotalCount, int Page, int PageSize, int TotalPages);
 
 public class SearchProductsEndpoint : ICarterModule
 {
@@ -10,10 +14,12 @@ public class SearchProductsEndpoint : ICarterModule
         {
             var query = new SearchProductsQuery(request);
             var result = await sender.Send(query);
-            return Results.Ok(result);
+            var response = result.Adapt<SearchProductsResponse>();
+            return Results.Ok(response);
         })
         .WithName("SearchProducts")
-        .Produces<SearchProductsResult>(StatusCodes.Status200OK)
+        .Produces<SearchProductsResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithSummary("Search Products")
         .WithDescription("Search and filter products with pagination")
         .WithTags("Products");

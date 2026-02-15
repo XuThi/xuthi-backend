@@ -1,6 +1,7 @@
 using Cart.Infrastructure.Data;
 using Cart.Infrastructure.Entity;
 using ProductCatalog.Infrastructure.Data;
+using Promotion.Infrastructure.Data;
 
 namespace Cart.Features.SyncCartPrices;
 
@@ -18,7 +19,7 @@ public class SyncCartPricesCommandValidator : AbstractValidator<SyncCartPricesCo
 }
 
 // Handler
-internal class SyncCartPricesHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb)
+internal class SyncCartPricesHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb, PromotionDbContext promotionDb)
     : ICommandHandler<SyncCartPricesCommand, SyncCartPricesResult>
 {
     public async Task<SyncCartPricesResult> Handle(SyncCartPricesCommand cmd, CancellationToken ct)
@@ -46,14 +47,19 @@ internal class SyncCartPricesHandler(CartDbContext cartDb, ProductCatalogDbConte
                 continue;
             }
 
-            // Update price
-            if (item.UnitPrice != variant.Price)
+            var (unitPrice, compareAtPrice) = await ResolveSalePrice(
+                item.ProductId,
+                item.VariantId,
+                variant.Price,
+                ct);
+
+            if (item.UnitPrice != unitPrice)
             {
-                warnings.Add($"{item.ProductName} price changed from {item.UnitPrice:N0}đ to {variant.Price:N0}đ");
-                item.UnitPrice = variant.Price;
+                warnings.Add($"{item.ProductName} price changed from {item.UnitPrice:N0}đ to {unitPrice:N0}đ");
+                item.UnitPrice = unitPrice;
             }
 
-            item.CompareAtPrice = null;
+            item.CompareAtPrice = compareAtPrice;
             item.AvailableStock = 10;
             item.IsInStock = true;
             item.UpdatedAt = DateTime.UtcNow;
@@ -75,4 +81,33 @@ internal class SyncCartPricesHandler(CartDbContext cartDb, ProductCatalogDbConte
         )).ToList(),
         cart.Subtotal, cart.VoucherDiscount, cart.AppliedVoucherCode, cart.Total, cart.TotalItems
     );
+
+    private async Task<(decimal UnitPrice, decimal? CompareAtPrice)> ResolveSalePrice(
+        Guid productId,
+        Guid variantId,
+        decimal basePrice,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var saleItem = await promotionDb.SaleCampaignItems
+            .Include(i => i.SaleCampaign)
+            .Where(i => i.ProductId == productId && (i.VariantId == null || i.VariantId == variantId))
+            .Where(i => i.SaleCampaign.IsActive && i.SaleCampaign.StartDate <= now && i.SaleCampaign.EndDate >= now)
+            .OrderByDescending(i => i.VariantId.HasValue)
+            .ThenBy(i => i.SalePrice)
+            .FirstOrDefaultAsync(ct);
+
+        if (saleItem is null)
+        {
+            return (basePrice, null);
+        }
+
+        var original = saleItem.OriginalPrice ?? basePrice;
+        if (original < saleItem.SalePrice)
+        {
+            original = basePrice;
+        }
+
+        return (saleItem.SalePrice, original);
+    }
 }

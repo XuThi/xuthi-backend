@@ -12,9 +12,14 @@ public class MergeCartsEndpoint : ICarterModule
             var command = new MergeCartsCommand(request.SessionId, request.CustomerId);
             
             var result = await sender.Send(command);
-            
-            return result.Success ? Results.Ok(result.Cart) : Results.NotFound();
+
+            var response = new MergeCartsResponse(result.Success, result.Cart);
+
+            return result.Success ? Results.Ok(response) : Results.NotFound();
         })
+        .Produces<MergeCartsResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Shopping Cart")
         .WithSummary("Merge anonymous cart to customer")
         .WithDescription("After login, merge anonymous session cart into customer cart");

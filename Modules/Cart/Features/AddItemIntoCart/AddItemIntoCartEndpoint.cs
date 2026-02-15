@@ -21,6 +21,7 @@ public class AddItemIntoCartEndpoint : ICarterModule
             return Results.Ok(response);
         })
         .Produces<AddToCartResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithTags("Shopping Cart")
         .WithSummary("Add item to cart")
         .WithDescription("Add product variant to cart. Creates cart if doesn't exist.");

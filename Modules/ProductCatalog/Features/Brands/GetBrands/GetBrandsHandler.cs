@@ -1,5 +1,8 @@
 namespace ProductCatalog.Features.Brands.GetBrands;
 
+public record GetBrandsQuery() : IQuery<GetBrandsResult>;
+public record GetBrandsResult(List<BrandItem> Brands);
+
 internal class GetBrandsHandler(ProductCatalogDbContext dbContext)
     : IQueryHandler<GetBrandsQuery, GetBrandsResult>
 {

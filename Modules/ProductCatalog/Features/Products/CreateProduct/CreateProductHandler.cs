@@ -8,7 +8,9 @@ public record CreateProductRequest(
     Guid CategoryId,
     Guid BrandId,
     bool IsActive = true,
-    List<CreateVariantInput>? Variants = null
+    List<CreateVariantInput>? Variants = null,
+    // Pre-uploaded image URLs (e.g. from Cloudinary)
+    List<string>? Images = null
 );
 
 public record CreateVariantInput(
@@ -93,7 +95,7 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
             }
         }
 
-        // Upload images if provided (store URL only for now - Cloudinary integration later)
+        // Upload images if provided via file uploads
         var imageUrls = new List<string>();
         if (command.Images?.Count > 0)
         {
@@ -104,8 +106,6 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
                 if (!AllowedExtensions.Contains(extension))
                     continue;
 
-                // TODO: Replace with Cloudinary upload
-                // For now, we'll store a placeholder URL
                 var imageId = Guid.NewGuid();
                 var placeholderUrl = $"/uploads/products/{imageId}{extension}";
                 
@@ -113,7 +113,7 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
                 {
                     Id = imageId,
                     Url = placeholderUrl,
-                    CloudinaryPublicId = null, // Will be set when Cloudinary is integrated
+                    CloudinaryPublicId = null,
                     AltText = product.Name
                 };
 
@@ -127,6 +127,36 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
                 });
 
                 imageUrls.Add(placeholderUrl);
+            }
+        }
+
+        // Add pre-uploaded image URLs (e.g. from Cloudinary)
+        if (request.Images?.Count > 0)
+        {
+            var sortOrder = product.Images.Count;
+            foreach (var url in request.Images)
+            {
+                if (string.IsNullOrWhiteSpace(url)) continue;
+                
+                var imageId = Guid.NewGuid();
+                var image = new Image
+                {
+                    Id = imageId,
+                    Url = url,
+                    CloudinaryPublicId = null,
+                    AltText = product.Name
+                };
+
+                dbContext.Images.Add(image);
+                product.Images.Add(new ProductImage
+                {
+                    Id = Guid.NewGuid(),
+                    ProductId = product.Id,
+                    ImageId = image.Id,
+                    SortOrder = sortOrder++
+                });
+
+                imageUrls.Add(url);
             }
         }
 

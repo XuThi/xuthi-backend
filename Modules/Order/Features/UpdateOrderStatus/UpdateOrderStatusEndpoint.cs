@@ -23,7 +23,7 @@ public class UpdateOrderStatusEndpoint : ICarterModule
 
             return Results.Ok(response);
         })
-        .Produces<UpdateOrderStatusResult>(StatusCodes.Status200OK)
+        .Produces<UpdateOrderStatusResponse>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithName("UpdateOrderStatus")

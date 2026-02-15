@@ -40,6 +40,8 @@ public class ValidateVoucherEndpoint : ICarterModule
             
             return Results.Ok(response);
         })
+        .Produces<ValidateVoucherResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
         .WithTags("Vouchers")
         .WithSummary("Validate voucher for cart")
         .WithDescription("Returns discount amount if valid, or error message if not");
