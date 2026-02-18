@@ -107,7 +107,9 @@ internal class SearchProductsHandler(ProductCatalogDbContext dbContext)
             Description: p.Description,
             Images: p.Images
                 .OrderBy(i => i.SortOrder)
-                .Select(i => i.Image.Url)
+                .Select(i => i.Image?.Url)
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Select(url => url!)
                 .ToList(),
             CategoryId: p.CategoryId,
             CategoryName: p.Category?.Name,
@@ -121,8 +123,8 @@ internal class SearchProductsHandler(ProductCatalogDbContext dbContext)
                     Sku: v.Sku,
                     Name: v.Description,
                     Price: v.Price,
-                    CompareAtPrice: null, // Simplified - no compare price
-                    StockQuantity: 100, // Simplified - always show as available
+                    CompareAtPrice: v.CompareAtPrice,
+                    StockQuantity: v.StockQuantity,
                     Images: [], // Variant-specific images not loaded here
                     Attributes: v.OptionSelections
                         .ToDictionary(os => os.VariantOptionId, os => os.Value)

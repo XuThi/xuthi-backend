@@ -75,7 +75,7 @@ internal class AddSaleCampaignItemHandler(PromotionDbContext dbContext)
             .Where(i => i.ProductId == productId)
             .Where(i => i.VariantId == null || variantId == null || i.VariantId == variantId)
             .Where(i => i.SaleCampaign.IsActive)
-            .Where(i => i.SaleCampaign.StartDate <= campaign.EndDate && i.SaleCampaign.EndDate >= campaign.StartDate)
+            .Where(i => i.SaleCampaign.StartDate <= campaign.EndDate)
             .AnyAsync(ct);
 
         if (overlapExists)

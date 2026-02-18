@@ -2,6 +2,7 @@ namespace ProductCatalog.Features.Categories.UpdateCategory;
 
 public record UpdateCategoryRequest(
     string? Name,
+    string? UrlSlug,
     string? Description,
     Guid? ParentCategoryId,
     int? SortOrder
@@ -14,7 +15,7 @@ public record UpdateCategoryResponse(
     string Name,
     string UrlSlug,
     string? Description,
-    Guid ParentCategoryId,
+    Guid? ParentCategoryId,
     int SortOrder
 );
 

@@ -82,8 +82,8 @@ internal class GetProductHandler(ProductCatalogDbContext dbContext)
             Sku: v.Sku,
             Name: v.Description, // Use description as variant name
             Price: v.Price,
-            CompareAtPrice: null, // Simplified - no compare price
-            StockQuantity: 100, // Simplified - always show as available
+            CompareAtPrice: v.CompareAtPrice,
+            StockQuantity: v.StockQuantity,
             Images: [], // Variant-specific images - could load separately if needed
             Attributes: v.OptionSelections.ToDictionary(os => os.VariantOptionId, os => os.Value)
         )).ToList();
@@ -96,7 +96,9 @@ internal class GetProductHandler(ProductCatalogDbContext dbContext)
             Description: product.Description,
             Images: product.Images
                 .OrderBy(i => i.SortOrder)
-                .Select(i => i.Image.Url)
+                .Select(i => i.Image?.Url)
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Select(url => url!)
                 .ToList(),
             CategoryId: product.CategoryId,
             CategoryName: product.Category?.Name,

@@ -1,5 +1,7 @@
 ﻿namespace ProductCatalog.Infrastructure.Entity;
 
+// TODO: Figuring out why tf do we add stockquantity and compareAtPrice
+
 public class Variant
 {
     public Guid Id { get; set; }
@@ -7,6 +9,8 @@ public class Variant
     public string Sku { get; set; } = string.Empty;
     public string BarCode { get; set; } = string.Empty;
     public decimal Price { get; set; }
+    public decimal? CompareAtPrice { get; set; }
+    public int StockQuantity { get; set; }
     public string Description { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
     public bool IsDeleted { get; set; }

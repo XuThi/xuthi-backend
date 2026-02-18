@@ -1,3 +1,12 @@
+using Identity.Features.Auth.GetCurrentUser;
+using Identity.Features.Auth.Login;
+using Identity.Features.Auth.LoginFacebook;
+using Identity.Features.Auth.LoginGoogle;
+using Identity.Features.Auth.Logout;
+using Identity.Features.Auth.OAuthCallback;
+using Identity.Features.Auth.Register;
+using Identity.Features.Auth.ResendVerification;
+using Identity.Features.Auth.VerifyEmail;
 using Identity.Infrastructure.Data;
 using Identity.Infrastructure.Entity;
 using Identity.Infrastructure.Services;
@@ -39,6 +48,17 @@ public static class IdentityModule
         
         // Add Email service
         builder.Services.AddScoped<IEmailService, EmailService>();
+
+        // Add auth feature handlers used by endpoint parameter binding
+        builder.Services.AddScoped<GetCurrentUserHandler>();
+        builder.Services.AddScoped<LoginHandler>();
+        builder.Services.AddScoped<LoginGoogleHandler>();
+        builder.Services.AddScoped<LoginFacebookHandler>();
+        builder.Services.AddScoped<LogoutHandler>();
+        builder.Services.AddScoped<OAuthCallbackHandler>();
+        builder.Services.AddScoped<RegisterHandler>();
+        builder.Services.AddScoped<ResendVerificationHandler>();
+        builder.Services.AddScoped<VerifyEmailHandler>();
         
         return builder;
     }

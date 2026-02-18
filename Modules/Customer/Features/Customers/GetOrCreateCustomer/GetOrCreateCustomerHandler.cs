@@ -38,6 +38,8 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
             }
             catch (DbUpdateException)
             {
+                db.ChangeTracker.Clear();
+
                 var existing = await db.Customers
                     .FirstOrDefaultAsync(c => c.ExternalUserId == query.ExternalUserId, ct);
 

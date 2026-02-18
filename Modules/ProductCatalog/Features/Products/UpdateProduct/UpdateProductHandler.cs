@@ -1,4 +1,7 @@
 namespace ProductCatalog.Features.Products.UpdateProduct;
+using ProductCatalog.Features.Media;
+
+// TODO: Yes try catch blocks again
 
 public record UpdateProductCommand(
     Guid Id, 
@@ -49,7 +52,9 @@ public record UpdateProductResult(
     List<string> ImageUrls
 );
 
-internal class UpdateProductHandler(ProductCatalogDbContext dbContext)
+internal class UpdateProductHandler(
+    ProductCatalogDbContext dbContext,
+    ICloudinaryMediaService cloudinaryMediaService)
     : ICommandHandler<UpdateProductCommand, UpdateProductResult>
 {
     private static readonly string[] AllowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
@@ -57,16 +62,14 @@ internal class UpdateProductHandler(ProductCatalogDbContext dbContext)
     public async Task<UpdateProductResult> Handle(UpdateProductCommand command, CancellationToken cancellationToken)
     {
         var product = await dbContext.Products
-            .Include(p => p.Images)
-                .ThenInclude(pi => pi.Image)
-            .Include(p => p.Variants)
-                .ThenInclude(v => v.OptionSelections)
             .FirstOrDefaultAsync(p => p.Id == command.Id && !p.IsDeleted, cancellationToken);
             
         if (product is null)
             throw new KeyNotFoundException("Product not found");
 
         var req = command.Request;
+        var pendingOptionSelectionUpdates = new List<(Guid VariantId, List<OptionSelectionInput> Selections)>();
+        var now = DateTime.UtcNow;
 
         // ---- Basic fields ----
         if (req.Name != null)
@@ -79,70 +82,73 @@ internal class UpdateProductHandler(ProductCatalogDbContext dbContext)
         if (req.BrandId.HasValue) product.BrandId = req.BrandId.Value;
         if (req.IsActive.HasValue) product.IsActive = req.IsActive.Value;
 
-        // ---- Remove specified images ----
-        var removeIds = command.RemoveImageIds ?? req.RemoveImageIds;
-        if (removeIds?.Count > 0)
+        // ---- Images ----
+        var existingProductImages = await dbContext.ProductImages
+            .Where(pi => pi.ProductId == product.Id)
+            .Include(pi => pi.Image)
+            .ToListAsync(cancellationToken);
+
+        var removeImageIdSet = new HashSet<Guid>(command.RemoveImageIds ?? req.RemoveImageIds ?? []);
+
+        if (req.Images != null)
         {
-            var imagesToRemove = product.Images.Where(pi => removeIds.Contains(pi.ImageId)).ToList();
-            foreach (var pi in imagesToRemove)
+            var keepUrls = req.Images
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var existing in existingProductImages)
             {
-                product.Images.Remove(pi);
-                dbContext.ProductImages.Remove(pi);
-                dbContext.Images.Remove(pi.Image);
+                var url = existing.Image?.Url;
+                if (string.IsNullOrWhiteSpace(url) || !keepUrls.Contains(url))
+                    removeImageIdSet.Add(existing.ImageId);
             }
         }
 
-        // ---- Update image sort orders ----
+        if (removeImageIdSet.Count > 0)
+        {
+            var rowsToRemove = existingProductImages
+                .Where(pi => removeImageIdSet.Contains(pi.ImageId))
+                .ToList();
+
+            foreach (var row in rowsToRemove)
+            {
+                await cloudinaryMediaService.DeleteImageAsync(row.Image?.CloudinaryPublicId, cancellationToken);
+            }
+
+            await dbContext.ProductImages
+                .Where(pi => pi.ProductId == product.Id && removeImageIdSet.Contains(pi.ImageId))
+                .ExecuteDeleteAsync(cancellationToken);
+
+            await dbContext.Images
+                .Where(i => removeImageIdSet.Contains(i.Id))
+                .ExecuteDeleteAsync(cancellationToken);
+        }
+
+        var activeProductImages = existingProductImages
+            .Where(pi => !removeImageIdSet.Contains(pi.ImageId))
+            .ToList();
+
         if (req.ImageSortOrders?.Count > 0)
         {
             foreach (var (imageId, sortOrder) in req.ImageSortOrders)
             {
-                var pi = product.Images.FirstOrDefault(x => x.ImageId == imageId);
-                if (pi != null)
-                    pi.SortOrder = sortOrder;
+                await dbContext.ProductImages
+                    .Where(pi => pi.ProductId == product.Id && pi.ImageId == imageId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(pi => pi.SortOrder, sortOrder), cancellationToken);
             }
         }
 
-        // ---- Upload new images via file upload ----
-        if (command.NewImages?.Count > 0)
-        {
-            var maxSort = product.Images.Any() ? product.Images.Max(x => x.SortOrder) : -1;
-            
-            foreach (var file in command.NewImages)
-            {
-                var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
-                if (!AllowedExtensions.Contains(extension))
-                    continue;
-
-                var imageId = Guid.NewGuid();
-                var placeholderUrl = $"/uploads/products/{imageId}{extension}";
-                
-                var image = new Image
-                {
-                    Id = imageId,
-                    Url = placeholderUrl,
-                    CloudinaryPublicId = null,
-                    AltText = product.Name
-                };
-
-                dbContext.Images.Add(image);
-                product.Images.Add(new ProductImage
-                {
-                    Id = Guid.NewGuid(),
-                    ProductId = product.Id,
-                    ImageId = image.Id,
-                    SortOrder = ++maxSort
-                });
-            }
-        }
+        var existingUrls = activeProductImages
+                .Select(pi => pi.Image?.Url)
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Select(url => url!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var maxSort = activeProductImages.Any() ? activeProductImages.Max(x => x.SortOrder) : -1;
 
         // ---- Add pre-uploaded image URLs (e.g. from Cloudinary) ----
-        if (req.Images?.Count > 0)
+        if (req.Images != null)
         {
-            // Collect existing URLs to avoid duplicates
-            var existingUrls = product.Images.Select(pi => pi.Image.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var maxSort = product.Images.Any() ? product.Images.Max(x => x.SortOrder) : -1;
-
             foreach (var url in req.Images)
             {
                 if (string.IsNullOrWhiteSpace(url) || existingUrls.Contains(url))
@@ -158,138 +164,197 @@ internal class UpdateProductHandler(ProductCatalogDbContext dbContext)
                 };
 
                 dbContext.Images.Add(image);
-                product.Images.Add(new ProductImage
+                dbContext.ProductImages.Add(new ProductImage
                 {
                     Id = Guid.NewGuid(),
                     ProductId = product.Id,
                     ImageId = image.Id,
                     SortOrder = ++maxSort
                 });
+
+                existingUrls.Add(url);
             }
         }
 
-        // ---- Update variants (full replace strategy) ----
+        // ---- Upload new images via file upload ----
+        if (command.NewImages?.Count > 0)
+        {
+            foreach (var file in command.NewImages)
+            {
+                var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+                if (!AllowedExtensions.Contains(extension))
+                    continue;
+
+                var uploadResult = await cloudinaryMediaService.UploadImageAsync(
+                    file,
+                    "products",
+                    cancellationToken);
+
+                var imageId = Guid.NewGuid();
+
+                var image = new Image
+                {
+                    Id = imageId,
+                    Url = uploadResult.Url,
+                    CloudinaryPublicId = uploadResult.PublicId,
+                    AltText = product.Name
+                };
+
+                dbContext.Images.Add(image);
+                dbContext.ProductImages.Add(new ProductImage
+                {
+                    Id = Guid.NewGuid(),
+                    ProductId = product.Id,
+                    ImageId = image.Id,
+                    SortOrder = ++maxSort
+                });
+
+                existingUrls.Add(uploadResult.Url);
+            }
+        }
+
+        // ---- Update variants (full replace strategy with set-based writes) ----
         if (req.Variants != null)
         {
-            var incomingIds = req.Variants
+            var providedIds = req.Variants
                 .Where(v => v.Id.HasValue)
                 .Select(v => v.Id!.Value)
+                .Distinct()
+                .ToList();
+
+            var variantOwnership = providedIds.Count == 0
+                ? new Dictionary<Guid, Guid>()
+                : await dbContext.Variants
+                    .Where(v => providedIds.Contains(v.Id))
+                    .ToDictionaryAsync(v => v.Id, v => v.ProductId, cancellationToken);
+
+            var incomingOwnedIds = req.Variants
+                .Where(v => v.Id.HasValue)
+                .Select(v => v.Id!.Value)
+                .Where(id => variantOwnership.TryGetValue(id, out var ownerId) && ownerId == product.Id)
                 .ToHashSet();
 
-            // Soft-delete variants not in the incoming set
-            foreach (var existing in product.Variants)
-            {
-                if (!incomingIds.Contains(existing.Id))
-                {
-                    existing.IsDeleted = true;
-                    existing.UpdatedAt = DateTime.UtcNow;
-                }
-            }
+            await dbContext.Variants
+                .Where(v => v.ProductId == product.Id && !incomingOwnedIds.Contains(v.Id))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(v => v.IsDeleted, true)
+                    .SetProperty(v => v.UpdatedAt, now), cancellationToken);
 
             foreach (var vr in req.Variants)
             {
-                if (vr.Id.HasValue)
+                Guid variantId;
+                var updateExisting = false;
+
+                if (vr.Id.HasValue &&
+                    variantOwnership.TryGetValue(vr.Id.Value, out var ownerProductId) &&
+                    ownerProductId == product.Id)
                 {
-                    // Update existing variant
-                    var existing = product.Variants.FirstOrDefault(v => v.Id == vr.Id.Value);
-                    if (existing != null)
-                    {
-                        existing.Sku = vr.Sku;
-                        existing.BarCode = vr.BarCode ?? vr.Sku;
-                        existing.Price = vr.Price;
-                        existing.Description = vr.Description ?? "";
-                        existing.IsActive = vr.IsActive;
-                        existing.IsDeleted = false;
-                        existing.UpdatedAt = DateTime.UtcNow;
-
-                        // Replace option selections
-                        if (existing.OptionSelections.Count > 0)
-                        {
-                            dbContext.VariantOptionSelections.RemoveRange(existing.OptionSelections);
-                            existing.OptionSelections.Clear();
-                        }
-
-                        if (vr.OptionSelections?.Count > 0)
-                        {
-                            existing.OptionSelections = vr.OptionSelections.Select(os =>
-                                new VariantOptionSelection
-                                {
-                                    VariantId = existing.Id,
-                                    VariantOptionId = os.VariantOptionId,
-                                    Value = os.Value
-                                }).ToList();
-                        }
-                    }
-                    else
-                    {
-                        // If the ID doesn't exist, create as new to avoid orphan selections
-                        var variant = new Variant
-                        {
-                            Id = vr.Id.Value,
-                            ProductId = product.Id,
-                            Sku = vr.Sku,
-                            BarCode = vr.BarCode ?? vr.Sku,
-                            Price = vr.Price,
-                            Description = vr.Description ?? "",
-                            IsActive = vr.IsActive,
-                            CreatedAt = DateTime.UtcNow,
-                            UpdatedAt = DateTime.UtcNow
-                        };
-
-                        if (vr.OptionSelections?.Count > 0)
-                        {
-                            variant.OptionSelections = vr.OptionSelections.Select(os =>
-                                new VariantOptionSelection
-                                {
-                                    VariantId = variant.Id,
-                                    VariantOptionId = os.VariantOptionId,
-                                    Value = os.Value
-                                }).ToList();
-                        }
-
-                        product.Variants.Add(variant);
-                        dbContext.Variants.Add(variant);
-                    }
+                    variantId = vr.Id.Value;
+                    updateExisting = true;
                 }
                 else
                 {
-                    // Create new variant
+                    if (vr.Id.HasValue && !variantOwnership.ContainsKey(vr.Id.Value))
+                        variantId = vr.Id.Value;
+                    else
+                        variantId = Guid.NewGuid();
+                }
+
+                if (updateExisting)
+                {
+                    await dbContext.Variants
+                        .Where(v => v.Id == variantId)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(v => v.Sku, vr.Sku)
+                            .SetProperty(v => v.BarCode, vr.BarCode ?? vr.Sku)
+                            .SetProperty(v => v.Price, vr.Price)
+                            .SetProperty(v => v.CompareAtPrice, vr.CompareAtPrice)
+                            .SetProperty(v => v.StockQuantity, vr.StockQuantity ?? 0)
+                            .SetProperty(v => v.Description, vr.Description ?? "")
+                            .SetProperty(v => v.IsActive, vr.IsActive)
+                            .SetProperty(v => v.IsDeleted, false)
+                            .SetProperty(v => v.UpdatedAt, now), cancellationToken);
+                }
+                else
+                {
                     var variant = new Variant
                     {
-                        Id = Guid.NewGuid(),
+                        Id = variantId,
                         ProductId = product.Id,
                         Sku = vr.Sku,
                         BarCode = vr.BarCode ?? vr.Sku,
                         Price = vr.Price,
+                        CompareAtPrice = vr.CompareAtPrice,
+                        StockQuantity = vr.StockQuantity ?? 0,
                         Description = vr.Description ?? "",
                         IsActive = vr.IsActive,
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow
+                        CreatedAt = now,
+                        UpdatedAt = now
                     };
 
-                    if (vr.OptionSelections?.Count > 0)
-                    {
-                        variant.OptionSelections = vr.OptionSelections.Select(os =>
-                            new VariantOptionSelection
-                            {
-                                VariantId = variant.Id,
-                                VariantOptionId = os.VariantOptionId,
-                                Value = os.Value
-                            }).ToList();
-                    }
-
-                    product.Variants.Add(variant);
                     dbContext.Variants.Add(variant);
                 }
+
+                pendingOptionSelectionUpdates.Add((variantId, vr.OptionSelections ?? []));
             }
         }
 
-        product.UpdatedAt = DateTime.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        product.UpdatedAt = now;
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            var resolved = await ResolveConcurrencyConflictsAsync(ex, cancellationToken);
+            if (!resolved)
+                throw;
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        if (pendingOptionSelectionUpdates.Count > 0)
+        {
+            var variantIds = pendingOptionSelectionUpdates
+                .Select(x => x.VariantId)
+                .Distinct()
+                .ToList();
+
+            var existingVariantIds = await dbContext.Variants
+                .Where(v => variantIds.Contains(v.Id))
+                .Select(v => v.Id)
+                .ToHashSetAsync(cancellationToken);
+
+            var existingVariantIdsList = existingVariantIds.ToList();
+            if (existingVariantIdsList.Count > 0)
+            {
+                await dbContext.VariantOptionSelections
+                    .Where(x => existingVariantIdsList.Contains(x.VariantId))
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            var newSelectionRows = pendingOptionSelectionUpdates
+                .Where(x => existingVariantIds.Contains(x.VariantId))
+                .SelectMany(x => x.Selections.Select(selection => new VariantOptionSelection
+                {
+                    VariantId = x.VariantId,
+                    VariantOptionId = selection.VariantOptionId,
+                    Value = selection.Value,
+                }))
+                .ToList();
+
+            if (newSelectionRows.Count > 0)
+            {
+                dbContext.VariantOptionSelections.AddRange(newSelectionRows);
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+        }
 
         var imageUrls = product.Images
             .OrderBy(x => x.SortOrder)
-            .Select(x => x.Image.Url)
+            .Select(x => x.Image?.Url)
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Select(url => url!)
             .ToList();
 
         return new UpdateProductResult(
@@ -303,6 +368,46 @@ internal class UpdateProductHandler(ProductCatalogDbContext dbContext)
             product.UpdatedAt,
             imageUrls
         );
+    }
+
+    private static async Task<bool> ResolveConcurrencyConflictsAsync(
+        DbUpdateConcurrencyException exception,
+        CancellationToken cancellationToken)
+    {
+        var resolvedAny = false;
+
+        foreach (var entry in exception.Entries)
+        {
+            if (entry.State == EntityState.Deleted)
+            {
+                var databaseValues = await entry.GetDatabaseValuesAsync(cancellationToken);
+                if (databaseValues is null)
+                {
+                    entry.State = EntityState.Detached;
+                    resolvedAny = true;
+                    continue;
+                }
+
+                entry.OriginalValues.SetValues(databaseValues);
+                resolvedAny = true;
+                continue;
+            }
+
+            if (entry.State == EntityState.Modified)
+            {
+                var databaseValues = await entry.GetDatabaseValuesAsync(cancellationToken);
+                if (databaseValues is null)
+                    return false;
+
+                entry.OriginalValues.SetValues(databaseValues);
+                resolvedAny = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return resolvedAny;
     }
 
     private static string GenerateSlug(string name) =>

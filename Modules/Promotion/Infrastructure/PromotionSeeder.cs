@@ -67,9 +67,13 @@ public static class PromotionSeeder
                 .Take(6)
                 .ToListAsync();
 
-            var bannerUrl = products.FirstOrDefault()?
+            var bannerUrlBlackFriday = products.FirstOrDefault()?
                 .Images.OrderBy(i => i.SortOrder)
                 .FirstOrDefault()?.Image.Url;
+
+            var bannerUrlDouble11 = products.Skip(1).FirstOrDefault()?
+                .Images.OrderBy(i => i.SortOrder)
+                .FirstOrDefault()?.Image.Url ?? bannerUrlBlackFriday;
 
             var blackFriday = new SaleCampaign
             {
@@ -77,7 +81,7 @@ public static class PromotionSeeder
                 Name = "Black Friday",
                 Slug = "black-friday",
                 Description = "Uu dai cuc soc cho mua sam Black Friday",
-                BannerImageUrl = bannerUrl,
+                BannerImageUrl = bannerUrlBlackFriday,
                 Type = SaleCampaignType.SeasonalSale,
                 StartDate = now.AddDays(-1),
                 EndDate = now.AddDays(14),
@@ -91,16 +95,19 @@ public static class PromotionSeeder
                 Name = "11.11 Mega Sale",
                 Slug = "11-11-mega-sale",
                 Description = "Giam gia dac biet ngay 11.11",
-                BannerImageUrl = bannerUrl,
+                BannerImageUrl = bannerUrlDouble11,
                 Type = SaleCampaignType.SeasonalSale,
                 StartDate = now.AddDays(-1),
                 EndDate = now.AddDays(7),
                 IsActive = true,
-                IsFeatured = false
+                IsFeatured = true
             };
 
             var campaignItems = new List<SaleCampaignItem>();
-            foreach (var product in products)
+            var blackFridayProducts = products.Take(3).ToList();
+            var double11Products = products.Skip(3).Take(3).ToList();
+
+            foreach (var product in blackFridayProducts)
             {
                 var price = product.Variants.FirstOrDefault()?.Price ?? 0m;
                 if (price <= 0)
@@ -123,6 +130,15 @@ public static class PromotionSeeder
                     MaxQuantity = null,
                     SoldQuantity = 0
                 });
+            }
+
+            foreach (var product in double11Products)
+            {
+                var price = product.Variants.FirstOrDefault()?.Price ?? 0m;
+                if (price <= 0)
+                {
+                    continue;
+                }
 
                 campaignItems.Add(new SaleCampaignItem
                 {
@@ -132,7 +148,7 @@ public static class PromotionSeeder
                     VariantId = null,
                     OriginalPrice = price,
                     SalePrice = Math.Round(price * 0.9m, 0),
-                    DiscountPercentage = Math.Round((1 - (0.9m)) * 100, 2),
+                    DiscountPercentage = Math.Round((1 - 0.9m) * 100, 2),
                     MaxQuantity = null,
                     SoldQuantity = 0
                 });

@@ -1,6 +1,7 @@
 namespace Promotion.Features.Vouchers.GetVouchers;
 
-public record GetVouchersRequest(bool IsActive = false, bool ValidOnly = false);
+// TODO: Why tf is IsActive = null the hell ?
+public record GetVouchersRequest(bool? IsActive = null, bool? ValidOnly = null);
 
 // Response
 public record GetVouchersResponse(List<VoucherDto> Vouchers);

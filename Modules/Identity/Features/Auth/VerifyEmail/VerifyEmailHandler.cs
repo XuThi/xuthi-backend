@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Identity;
 
 namespace Identity.Features.Auth.VerifyEmail;
 
+// TODO: Figure out why the fuck do we normalized token
+
 public record VerifyEmailQuery(VerifyEmailRequest Request);
 
 public class VerifyEmailHandler
@@ -20,6 +22,15 @@ public class VerifyEmailHandler
             return Results.BadRequest(new ErrorResponse("Invalid verification link"));
         }
 
+        if (!Guid.TryParse(request.UserId, out _))
+        {
+            return Results.BadRequest(new ErrorResponse("Invalid verification link"));
+        }
+
+        var normalizedToken = request.Token
+            .Replace(" ", "+")
+            .Trim();
+
         var user = await userManager.FindByIdAsync(request.UserId);
 
         if (user == null)
@@ -32,7 +43,7 @@ public class VerifyEmailHandler
             return Results.Ok(new VerifyEmailResponse("Email already verified", true));
         }
 
-        var result = await userManager.ConfirmEmailAsync(user, request.Token);
+        var result = await userManager.ConfirmEmailAsync(user, normalizedToken);
 
         if (!result.Succeeded)
         {

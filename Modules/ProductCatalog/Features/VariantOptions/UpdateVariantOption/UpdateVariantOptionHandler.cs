@@ -3,6 +3,8 @@ using ProductCatalog.Features.VariantOptions.GetVariantOptions;
 
 namespace ProductCatalog.Features.VariantOptions.UpdateVariantOption;
 
+// TODO: This look sus ngl
+
 public record UpdateVariantOptionRequest(string? Name, string? DisplayType, List<string>? Values);
 public record UpdateVariantOptionCommand(string Id, UpdateVariantOptionRequest Request) : ICommand<VariantOptionResult>;
 
@@ -12,7 +14,6 @@ internal class UpdateVariantOptionHandler(ProductCatalogDbContext dbContext)
     public async Task<VariantOptionResult> Handle(UpdateVariantOptionCommand command, CancellationToken cancellationToken)
     {
         var option = await dbContext.VariantOptions
-            .Include(o => o.Values)
             .FirstOrDefaultAsync(o => o.Id == command.Id, cancellationToken);
 
         if (option is null)
@@ -30,24 +31,17 @@ internal class UpdateVariantOptionHandler(ProductCatalogDbContext dbContext)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // Detach tracked values to avoid concurrency conflicts, then hard-delete by option id.
-            if (option.Values.Count > 0)
-            {
-                foreach (var existing in option.Values)
-                {
-                    dbContext.Entry(existing).State = EntityState.Detached;
-                }
-                option.Values.Clear();
-            }
+            var existingValues = await dbContext.VariantOptionValues
+                .Where(v => v.VariantOptionId == option.Id)
+                .ToListAsync(cancellationToken);
 
-            await dbContext.Database.ExecuteSqlRawAsync(
-                "DELETE FROM \"VariantOptionValues\" WHERE \"VariantOptionId\" = {0}",
-                option.Id);
+            if (existingValues.Count > 0)
+                dbContext.VariantOptionValues.RemoveRange(existingValues);
 
             for (var i = 0; i < normalized.Count; i++)
             {
                 var value = normalized[i];
-                option.Values.Add(new VariantOptionValue
+                dbContext.VariantOptionValues.Add(new VariantOptionValue
                 {
                     Id = Guid.NewGuid(),
                     VariantOptionId = option.Id,
@@ -60,6 +54,12 @@ internal class UpdateVariantOptionHandler(ProductCatalogDbContext dbContext)
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        return new VariantOptionResult(option.Id, option.Name, option.DisplayType, option.Values.OrderBy(v => v.SortOrder).Select(v => v.Value).ToList());
+        var values = await dbContext.VariantOptionValues
+            .Where(v => v.VariantOptionId == option.Id)
+            .OrderBy(v => v.SortOrder)
+            .Select(v => v.Value)
+            .ToListAsync(cancellationToken);
+
+        return new VariantOptionResult(option.Id, option.Name, option.DisplayType, values);
     }
 }

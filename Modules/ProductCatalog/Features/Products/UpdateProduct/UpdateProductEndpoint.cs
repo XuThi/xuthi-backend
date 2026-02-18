@@ -3,6 +3,8 @@ using Mapster;
 
 namespace ProductCatalog.Features.Products.UpdateProduct;
 
+// TODO: Remove the fucking try catch block here
+
 public record UpdateProductResponse(
     Guid Id,
     string Name,
@@ -40,31 +42,41 @@ public class UpdateProductEndpoint : ICarterModule
             HttpRequest httpRequest,
             ISender sender) =>
         {
-            var form = await httpRequest.ReadFormAsync();
-            
-            // Parse JSON data from form field
-            var jsonData = form["data"].FirstOrDefault();
-            UpdateProductRequest? request = null;
-            
-            if (!string.IsNullOrEmpty(jsonData))
+            try
             {
-                request = JsonSerializer.Deserialize<UpdateProductRequest>(jsonData, new JsonSerializerOptions
+                var form = await httpRequest.ReadFormAsync();
+
+                var jsonData = form["data"].FirstOrDefault();
+                UpdateProductRequest? request = null;
+
+                if (!string.IsNullOrEmpty(jsonData))
                 {
-                    PropertyNameCaseInsensitive = true
-                });
+                    request = JsonSerializer.Deserialize<UpdateProductRequest>(jsonData, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                }
+                request ??= new UpdateProductRequest(null, null, null, null, null, null, null);
+
+                var images = form.Files.GetFiles("images").ToList();
+                var removeImageIds = form["removeImageIds"]
+                    .Where(x => Guid.TryParse(x, out _))
+                    .Select(x => Guid.Parse(x!))
+                    .ToList();
+
+                var command = new UpdateProductCommand(id, request, images, removeImageIds);
+                var result = await sender.Send(command);
+                var response = result.Adapt<UpdateProductResponse>();
+                return Results.Ok(response);
             }
-            request ??= new UpdateProductRequest(null, null, null, null, null, null, null);
-
-            var images = form.Files.GetFiles("images").ToList();
-            var removeImageIds = form["removeImageIds"]
-                .Where(x => Guid.TryParse(x, out _))
-                .Select(x => Guid.Parse(x!))
-                .ToList();
-
-            var command = new UpdateProductCommand(id, request, images, removeImageIds);
-            var result = await sender.Send(command);
-            var response = result.Adapt<UpdateProductResponse>();
-            return Results.Ok(response);
+            catch (JsonException)
+            {
+                return Results.BadRequest(new { message = "Dữ liệu sản phẩm không hợp lệ." });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new { message = ex.Message });
+            }
         })
         .WithName("UpdateProductWithImages")
         .Produces<UpdateProductResponse>(StatusCodes.Status200OK)

@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Http;
+using ProductCatalog.Features.Media;
 
 namespace ProductCatalog.Features.Products.CreateProduct;
 
@@ -17,6 +18,8 @@ public record CreateVariantInput(
     string Sku,
     string? BarCode,
     decimal Price,
+    decimal? CompareAtPrice,
+    int? StockQuantity,
     string? Description,
     bool IsActive = true,
     List<OptionSelectionInput>? OptionSelections = null
@@ -38,7 +41,9 @@ public class CreateProductCommandValidator : AbstractValidator<CreateProductComm
     }
 }
 
-internal class CreateProductHandler(ProductCatalogDbContext dbContext)
+internal class CreateProductHandler(
+    ProductCatalogDbContext dbContext,
+    ICloudinaryMediaService cloudinaryMediaService)
     : ICommandHandler<CreateProductCommand, CreateProductResult>
 {
     private static readonly string[] AllowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
@@ -73,6 +78,8 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
                     Sku = vr.Sku,
                     BarCode = vr.BarCode ?? vr.Sku, // Default barcode to SKU
                     Price = vr.Price,
+                    CompareAtPrice = vr.CompareAtPrice,
+                    StockQuantity = vr.StockQuantity ?? 0,
                     Description = vr.Description ?? "",
                     IsActive = vr.IsActive,
                     CreatedAt = DateTime.UtcNow,
@@ -106,14 +113,18 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
                 if (!AllowedExtensions.Contains(extension))
                     continue;
 
+                var uploadResult = await cloudinaryMediaService.UploadImageAsync(
+                    file,
+                    "products",
+                    cancellationToken);
+
                 var imageId = Guid.NewGuid();
-                var placeholderUrl = $"/uploads/products/{imageId}{extension}";
                 
                 var image = new Image
                 {
                     Id = imageId,
-                    Url = placeholderUrl,
-                    CloudinaryPublicId = null,
+                    Url = uploadResult.Url,
+                    CloudinaryPublicId = uploadResult.PublicId,
                     AltText = product.Name
                 };
 
@@ -126,7 +137,7 @@ internal class CreateProductHandler(ProductCatalogDbContext dbContext)
                     SortOrder = sortOrder++
                 });
 
-                imageUrls.Add(placeholderUrl);
+                imageUrls.Add(uploadResult.Url);
             }
         }
 

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ProductCatalog.Features.Media;
 using ProductCatalog.Infrastructure;
 using ProductCatalog.Infrastructure.Data;
 
@@ -12,6 +13,7 @@ public static class ProductCatalogModule
     {
         // Add DbContext with Aspire PostgreSQL integration
         builder.AddNpgsqlDbContext<ProductCatalogDbContext>("appdata");
+        builder.Services.AddScoped<ICloudinaryMediaService, CloudinaryMediaService>();
 
         return builder.Services;
     }

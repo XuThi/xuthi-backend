@@ -82,7 +82,7 @@ internal class UpdateSaleCampaignHandler(PromotionDbContext dbContext)
             .Where(i => i.SaleCampaignId != campaign.Id)
             .Where(i => productIds.Contains(i.ProductId))
             .Where(i => i.SaleCampaign.IsActive)
-            .Where(i => i.SaleCampaign.StartDate <= campaign.EndDate && i.SaleCampaign.EndDate >= campaign.StartDate)
+            .Where(i => i.SaleCampaign.StartDate <= campaign.EndDate)
             .Where(i => i.VariantId == null || variantIds.Contains(i.VariantId.Value) || variantIds.Count == 0)
             .AnyAsync(ct);
 

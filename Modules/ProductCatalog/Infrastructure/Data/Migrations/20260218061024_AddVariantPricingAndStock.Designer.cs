@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProductCatalog.Infrastructure.Data;
@@ -11,9 +12,11 @@ using ProductCatalog.Infrastructure.Data;
 namespace ProductCatalog.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(ProductCatalogDbContext))]
-    partial class ProductCatalogDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260218061024_AddVariantPricingAndStock")]
+    partial class AddVariantPricingAndStock
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -261,12 +264,12 @@ namespace ProductCatalog.Infrastructure.Data.Migrations
                     b.Property<Guid>("ProductId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("StockQuantity")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Sku")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<int>("StockQuantity")
-                        .HasColumnType("integer");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");

@@ -7,7 +7,7 @@ public record CategoryResult(
     string Name,
     string UrlSlug,
     string? Description,
-    Guid ParentCategoryId,
+    Guid? ParentCategoryId,
     int SortOrder
 );
 
@@ -25,10 +25,12 @@ internal class UpdateCategoryHandler(ProductCatalogDbContext dbContext)
         if (req.Name != null)
         {
             category.Name = req.Name;
-            category.UrlSlug = req.Name.ToLowerInvariant().Replace(" ", "-");
+            category.UrlSlug = GenerateSlug(req.Name);
         }
+        if (!string.IsNullOrWhiteSpace(req.UrlSlug))
+            category.UrlSlug = GenerateSlug(req.UrlSlug);
         if (req.Description != null) category.Description = req.Description;
-        if (req.ParentCategoryId.HasValue) category.ParentCategoryId = req.ParentCategoryId.Value;
+        if (req.ParentCategoryId != null) category.ParentCategoryId = (Guid)req.ParentCategoryId;
         if (req.SortOrder.HasValue) category.SortOrder = req.SortOrder.Value;
 
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -37,5 +39,32 @@ internal class UpdateCategoryHandler(ProductCatalogDbContext dbContext)
             category.Id, category.Name, category.UrlSlug,
             category.Description, category.ParentCategoryId, category.SortOrder
         );
+    }
+
+    private static string GenerateSlug(string value)
+    {
+        var lowered = value.Trim().ToLowerInvariant();
+        var sb = new System.Text.StringBuilder(lowered.Length);
+        var previousDash = false;
+
+        foreach (var ch in lowered.Normalize(System.Text.NormalizationForm.FormD))
+        {
+            var unicodeCategory = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch);
+            if (unicodeCategory == System.Globalization.UnicodeCategory.NonSpacingMark)
+                continue;
+
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+            {
+                sb.Append(ch);
+                previousDash = false;
+            }
+            else if (!previousDash)
+            {
+                sb.Append('-');
+                previousDash = true;
+            }
+        }
+
+        return sb.ToString().Trim('-');
     }
 }
