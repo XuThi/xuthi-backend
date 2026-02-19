@@ -35,14 +35,7 @@ public class ResendVerificationHandler
         var frontendUrl = config["FrontendUrl"] ?? AuthHelpers.GetFrontendUrl(httpContext);
         var verificationLink = $"{frontendUrl}/auth/verify-email?userId={user.Id}&token={Uri.EscapeDataString(emailToken)}";
 
-        try
-        {
-            await emailService.SendVerificationEmailAsync(user.Email!, verificationLink);
-        }
-        catch
-        {
-            return Results.Problem("Failed to send verification email");
-        }
+        await emailService.SendVerificationEmailAsync(user.Email!, verificationLink);
 
         return Results.Ok(new MessageResponse("Verification email sent"));
     }

@@ -3,8 +3,6 @@ using Customer.Infrastructure.Entity;
 
 namespace Customer.Features.Customers.GetCustomerByExternalId;
 
-// TODO: Rename this and the endpoint
-
 // Query and Result
 public record GetCustomerByExternalIdQuery(string ExternalUserId) : IQuery<GetCustomerByExternalIdResult>;
 public record GetCustomerByExternalIdResult(CustomerDetailDto? Customer);

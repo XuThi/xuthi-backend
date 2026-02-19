@@ -34,9 +34,14 @@ internal class AddCustomerOrderHandler(CustomerDbContext db)
 
     public async Task<AddCustomerOrderResult> Handle(AddCustomerOrderCommand cmd, CancellationToken ct)
     {
-        var customer = await db.Customers.FindAsync([cmd.CustomerId], ct);
+        var customer = await db.Customers
+            .FirstOrDefaultAsync(c => c.Id == cmd.CustomerId, ct)
+            ?? await db.Customers.FirstOrDefaultAsync(
+                c => c.ExternalUserId == cmd.CustomerId.ToString(),
+                ct);
+
         if (customer is null)
-            throw new InvalidOperationException($"Customer {cmd.CustomerId} not found");
+            return new AddCustomerOrderResult(CustomerTier.Standard, 0);
 
         // Update stats
         customer.TotalSpent += cmd.OrderTotal;
@@ -61,7 +66,7 @@ internal class AddCustomerOrderHandler(CustomerDbContext db)
         db.PointsHistory.Add(new PointsHistory
         {
             Id = Guid.NewGuid(),
-            CustomerId = cmd.CustomerId,
+            CustomerId = customer.Id,
             Type = PointsTransactionType.Earned,
             Points = cmd.PointsEarned,
             BalanceAfter = customer.LoyaltyPoints,

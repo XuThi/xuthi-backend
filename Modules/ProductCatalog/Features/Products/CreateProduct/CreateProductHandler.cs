@@ -107,12 +107,17 @@ internal class CreateProductHandler(
         if (command.Images?.Count > 0)
         {
             var sortOrder = 0;
-            foreach (var file in command.Images)
-            {
-                var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
-                if (!AllowedExtensions.Contains(extension))
-                    continue;
+            var validFiles = command.Images
+                .Where(file => AllowedExtensions.Contains(Path.GetExtension(file.FileName).ToLowerInvariant()))
+                .ToList();
 
+            if (validFiles.Count == 0)
+            {
+                throw new InvalidOperationException("Định dạng ảnh không được hỗ trợ. Chỉ chấp nhận: jpg, jpeg, png, webp, gif.");
+            }
+
+            foreach (var file in validFiles)
+            {
                 var uploadResult = await cloudinaryMediaService.UploadImageAsync(
                     file,
                     "products",

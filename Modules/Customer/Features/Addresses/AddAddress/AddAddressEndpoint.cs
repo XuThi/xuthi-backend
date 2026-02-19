@@ -31,7 +31,7 @@ public class AddAddressEndpoint : ICarterModule
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Customer Addresses")
-        .WithSummary("Add new address");
-        // TODO: .RequireAuthorization()
+        .WithSummary("Add new address")
+        .RequireAuthorization("Authenticated");
     }
 }

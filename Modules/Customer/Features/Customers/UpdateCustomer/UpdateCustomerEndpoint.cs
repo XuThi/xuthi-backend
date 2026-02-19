@@ -31,7 +31,7 @@ public class UpdateCustomerEndpoint : ICarterModule
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Customers")
-        .WithSummary("Update customer profile");
-        // TODO: .RequireAuthorization()
+        .WithSummary("Update customer profile")
+        .RequireAuthorization("Authenticated");
     }
 }

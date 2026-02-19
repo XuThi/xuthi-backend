@@ -1,9 +1,8 @@
 using System.Text.Json;
 using Mapster;
+using Microsoft.AspNetCore.Mvc;
 
 namespace ProductCatalog.Features.Products.UpdateProduct;
-
-// TODO: Remove the fucking try catch block here
 
 public record UpdateProductResponse(
     Guid Id,
@@ -40,43 +39,55 @@ public class UpdateProductEndpoint : ICarterModule
         app.MapPut("/api/products/{id:guid}/with-images", async (
             Guid id,
             HttpRequest httpRequest,
+            [FromForm(Name = "data")] string? data,
+            [FromForm(Name = "images")] List<IFormFile>? images,
+            [FromForm(Name = "removeImageIds")] List<Guid>? removeImageIds,
+            ILogger<UpdateProductEndpoint> logger,
             ISender sender) =>
         {
-            try
+            if (string.IsNullOrWhiteSpace(data) && httpRequest.HasFormContentType)
             {
                 var form = await httpRequest.ReadFormAsync();
+                data = form["data"].FirstOrDefault();
+            }
 
-                var jsonData = form["data"].FirstOrDefault();
-                UpdateProductRequest? request = null;
+            if ((images is null || images.Count == 0) && httpRequest.HasFormContentType)
+            {
+                var form = await httpRequest.ReadFormAsync();
+                images = form.Files.GetFiles("images").ToList();
 
-                if (!string.IsNullOrEmpty(jsonData))
+                if ((removeImageIds is null || removeImageIds.Count == 0)
+                    && form.TryGetValue("removeImageIds", out var removeIdsValues))
                 {
-                    request = JsonSerializer.Deserialize<UpdateProductRequest>(jsonData, new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    });
+                    removeImageIds = removeIdsValues
+                        .Where(x => Guid.TryParse(x, out _))
+                        .Select(Guid.Parse)
+                        .ToList();
                 }
-                request ??= new UpdateProductRequest(null, null, null, null, null, null, null);
+            }
 
-                var images = form.Files.GetFiles("images").ToList();
-                var removeImageIds = form["removeImageIds"]
-                    .Where(x => Guid.TryParse(x, out _))
-                    .Select(x => Guid.Parse(x!))
-                    .ToList();
+            logger.LogInformation(
+                "UpdateProductWithImages request for {ProductId}: imageCount={ImageCount}, imageNames=[{ImageNames}]",
+                id,
+                images?.Count ?? 0,
+                string.Join(", ", (images ?? []).Select(x => $"{x.FileName} ({x.Length} bytes)")));
 
-                var command = new UpdateProductCommand(id, request, images, removeImageIds);
-                var result = await sender.Send(command);
-                var response = result.Adapt<UpdateProductResponse>();
-                return Results.Ok(response);
-            }
-            catch (JsonException)
+            UpdateProductRequest? request = null;
+
+            if (!string.IsNullOrWhiteSpace(data))
             {
-                return Results.BadRequest(new { message = "Dữ liệu sản phẩm không hợp lệ." });
+                request = JsonSerializer.Deserialize<UpdateProductRequest>(data, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
             }
-            catch (InvalidOperationException ex)
-            {
-                return Results.BadRequest(new { message = ex.Message });
-            }
+
+            request ??= new UpdateProductRequest(null, null, null, null, null, null, null);
+
+            var command = new UpdateProductCommand(id, request, images ?? [], removeImageIds ?? []);
+            var result = await sender.Send(command);
+            var response = result.Adapt<UpdateProductResponse>();
+            return Results.Ok(response);
         })
         .WithName("UpdateProductWithImages")
         .Produces<UpdateProductResponse>(StatusCodes.Status200OK)

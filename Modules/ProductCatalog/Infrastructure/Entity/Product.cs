@@ -9,13 +9,12 @@ public class Product
     public string UrlSlug { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public Guid BrandId { get; set; }
-    public Guid CategoryId { get; set; }
-    public bool IsActive { get; set; } = true;
-    public bool IsDeleted { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public bool IsActive { get; set; } = true;
+    public bool IsDeleted { get; set; }
+    public Guid CategoryId { get; set; }
 
-    // Navigation
     public Brand Brand { get; set; } = null!;
     public Category Category { get; set; } = null!;
     public List<Variant> Variants { get; set; } = [];

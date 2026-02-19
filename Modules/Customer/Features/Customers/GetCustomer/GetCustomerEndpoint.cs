@@ -22,7 +22,7 @@ public class GetCustomerEndpoint : ICarterModule
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithTags("Customers")
-        .WithSummary("Get customer by ID");
-        // TODO: .RequireAuthorization()
+        .WithSummary("Get customer by ID")
+        .RequireAuthorization("Authenticated");
     }
 }

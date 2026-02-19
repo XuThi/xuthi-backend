@@ -1,7 +1,5 @@
 ﻿namespace ProductCatalog.Infrastructure.Entity;
 
-// TODO: Figuring out why tf do we add stockquantity and compareAtPrice
-
 public class Variant
 {
     public Guid Id { get; set; }

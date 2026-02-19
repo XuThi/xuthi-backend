@@ -1,10 +1,11 @@
 using Customer.Infrastructure.Data;
 using Customer.Infrastructure.Entity;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Customer.Features.Customers.GetOrCreateCustomer;
 
-// TODO: Remove try catch here because why ? tf
+// TODO: Seperate into GetCustomer and CreateCustomer if the logic becomes more complex. For now it's simple enough to combine since they share most of the code.
 
 // Query and Result
 public record GetOrCreateCustomerQuery(string ExternalUserId, string Email, string? FullName = null)
@@ -17,8 +18,11 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
 {
     public async Task<GetOrCreateCustomerResult> Handle(GetOrCreateCustomerQuery query, CancellationToken ct)
     {
+        var now = DateTime.UtcNow;
         var customer = await db.Customers
             .FirstOrDefaultAsync(c => c.ExternalUserId == query.ExternalUserId, ct);
+
+        var isNew = false;
 
         if (customer is null)
         {
@@ -28,33 +32,35 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
                 ExternalUserId = query.ExternalUserId,
                 Email = query.Email,
                 FullName = query.FullName,
-                Tier = CustomerTier.Standard
+                Tier = CustomerTier.Standard,
+                LoyaltyPoints = 0,
+                TotalSpent = 0,
+                TotalOrders = 0,
+                AcceptsMarketing = true,
+                AcceptsSms = true,
+                CreatedAt = now,
+                UpdatedAt = now,
+                LastLoginAt = now
             };
+
             db.Customers.Add(customer);
+
             try
             {
                 await db.SaveChangesAsync(ct);
-                return new GetOrCreateCustomerResult(MapToDto(customer), true);
+                isNew = true;
             }
-            catch (DbUpdateException)
+            catch (DbUpdateException ex) when (IsExternalUserUniqueViolation(ex))
             {
-                db.ChangeTracker.Clear();
-
-                var existing = await db.Customers
-                    .FirstOrDefaultAsync(c => c.ExternalUserId == query.ExternalUserId, ct);
-
-                if (existing is null)
-                {
-                    throw;
-                }
-
-                return new GetOrCreateCustomerResult(MapToDto(existing), false);
+                db.Entry(customer).State = EntityState.Detached;
+                customer = await db.Customers.FirstAsync(c => c.ExternalUserId == query.ExternalUserId, ct);
+                isNew = false;
             }
         }
 
         // Update last login
         var changed = false;
-        customer.LastLoginAt = DateTime.UtcNow;
+        customer.LastLoginAt = now;
         changed = true;
 
         if (!string.IsNullOrWhiteSpace(query.Email) && !string.Equals(customer.Email, query.Email, StringComparison.OrdinalIgnoreCase))
@@ -74,11 +80,22 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
             await db.SaveChangesAsync(ct);
         }
 
-        return new GetOrCreateCustomerResult(MapToDto(customer), false);
+        return new GetOrCreateCustomerResult(MapToDto(customer), isNew);
     }
 
     private static CustomerDto MapToDto(CustomerProfile c) => new(
         c.Id, c.ExternalUserId, c.Email, c.FullName, c.Phone,
         c.Tier, c.LoyaltyPoints, c.TotalSpent, c.TotalOrders,
         c.TierDiscountPercentage, c.CreatedAt, c.LastOrderAt);
+
+    private static bool IsExternalUserUniqueViolation(DbUpdateException ex)
+    {
+        if (ex.GetBaseException() is not PostgresException pg)
+        {
+            return false;
+        }
+
+        return pg.SqlState == PostgresErrorCodes.UniqueViolation
+            && string.Equals(pg.ConstraintName, "IX_Customers_ExternalUserId", StringComparison.OrdinalIgnoreCase);
+    }
 }

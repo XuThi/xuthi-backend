@@ -41,31 +41,23 @@ public class EmailService : IEmailService
             return;
         }
 
-        try
+        using var client = new SmtpClient(_smtpHost, _smtpPort)
         {
-            using var client = new SmtpClient(_smtpHost, _smtpPort)
-            {
-                EnableSsl = true,
-                Credentials = new NetworkCredential(_smtpEmail, _smtpPassword)
-            };
+            EnableSsl = true,
+            Credentials = new NetworkCredential(_smtpEmail, _smtpPassword)
+        };
 
-            var message = new MailMessage
-            {
-                From = new MailAddress(_smtpEmail, _fromName),
-                Subject = subject,
-                Body = htmlBody,
-                IsBodyHtml = true
-            };
-            message.To.Add(to);
-
-            await client.SendMailAsync(message);
-            _logger.LogInformation("Email sent successfully to {To}", to);
-        }
-        catch (Exception ex)
+        var message = new MailMessage
         {
-            _logger.LogError(ex, "Failed to send email to {To}", to);
-            throw;
-        }
+            From = new MailAddress(_smtpEmail, _fromName),
+            Subject = subject,
+            Body = htmlBody,
+            IsBodyHtml = true
+        };
+        message.To.Add(to);
+
+        await client.SendMailAsync(message);
+        _logger.LogInformation("Email sent successfully to {To}", to);
     }
 
     public async Task SendVerificationEmailAsync(string to, string verificationLink)

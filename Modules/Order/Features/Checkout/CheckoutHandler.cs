@@ -195,20 +195,13 @@ internal class CheckoutHandler(
         {
             // Calculate points: 1 point per 10,000 VND spent
             var pointsEarned = (int)(total / 10000);
-            
-            try
-            {
-                await sender.Send(new AddCustomerOrderCommand(
-                    req.CustomerId.Value,
-                    total,
-                    pointsEarned,
-                    order.Id
-                ), cancellationToken);
-            }
-            catch
-            {
-                // Log but don't fail checkout if customer update fails
-            }
+
+            await sender.Send(new AddCustomerOrderCommand(
+                req.CustomerId.Value,
+                total,
+                pointsEarned,
+                order.Id
+            ), cancellationToken);
         }
 
         return new CheckoutResult(

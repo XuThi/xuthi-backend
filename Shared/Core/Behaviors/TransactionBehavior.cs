@@ -7,7 +7,6 @@ namespace Core.Behaviors;
 
 /// <summary>
 /// Pipeline behavior that wraps command handlers in a database transaction.
-/// Uses CreateExecutionStrategy() to be compatible with NpgsqlRetryingExecutionStrategy.
 /// Skips transaction wrapping for requests that implement <see cref="ISkipTransaction"/>.
 /// </summary>
 public class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
@@ -46,11 +45,7 @@ public class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
 
         // Try to find a registered DbContext to use for the transaction
         var dbContextTypes = AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(a =>
-            {
-                try { return a.GetTypes(); }
-                catch { return []; }
-            })
+            .SelectMany(a => a.GetTypes())
             .Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(DbContext)))
             .ToList();
 
@@ -67,26 +62,23 @@ public class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TReque
             return await next();
         }
 
-        // Use CreateExecutionStrategy() to be compatible with NpgsqlRetryingExecutionStrategy
+        if (dbContext.Database.CurrentTransaction is not null)
+        {
+            _logger.LogInformation("[Transaction] Reusing existing transaction for {RequestName}", requestName);
+            return await next();
+        }
+
         var strategy = dbContext.Database.CreateExecutionStrategy();
 
         return await strategy.ExecuteAsync(async () =>
         {
             await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-            try
-            {
-                var response = await next();
-                await transaction.CommitAsync(cancellationToken);
-                _logger.LogInformation("[Transaction] Committed transaction for {RequestName}", requestName);
-                return response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[Transaction] Rolling back transaction for {RequestName}", requestName);
-                await transaction.RollbackAsync(cancellationToken);
-                throw;
-            }
+            var response = await next();
+            await transaction.CommitAsync(cancellationToken);
+
+            _logger.LogInformation("[Transaction] Committed transaction for {RequestName}", requestName);
+            return response;
         });
     }
 }

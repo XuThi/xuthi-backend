@@ -41,14 +41,7 @@ public class RegisterHandler
         var frontendUrl = config["FrontendUrl"] ?? AuthHelpers.GetFrontendUrl(httpContext);
         var verificationLink = $"{frontendUrl}/auth/verify-email?userId={user.Id}&token={Uri.EscapeDataString(emailToken)}";
 
-        try
-        {
-            await emailService.SendVerificationEmailAsync(user.Email!, verificationLink);
-        }
-        catch
-        {
-            // Ignore email failures
-        }
+        await emailService.SendVerificationEmailAsync(user.Email!, verificationLink);
 
         var roles = await userManager.GetRolesAsync(user);
         var token = AuthHelpers.GenerateJwtToken(user, roles, config);

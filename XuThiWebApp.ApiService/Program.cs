@@ -32,11 +32,8 @@ builder.AddServiceDefaults();
 // Add services to the container.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<CustomExceptionHandler>();
-// TODO: Remove this add HttpClient
-builder.Services.AddHttpClient();
 
 // Add CORS for frontend
-// TODO: Remove this when in production
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>

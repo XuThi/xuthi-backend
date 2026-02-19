@@ -3,8 +3,6 @@ using CloudinaryDotNet.Actions;
 
 namespace ProductCatalog.Features.Media;
 
-// TODO: Take a look at this since the way it is reading env files is crazy
-
 public interface ICloudinaryMediaService
 {
     Task<(string Url, string? PublicId)> UploadImageAsync(IFormFile file, string folder, CancellationToken cancellationToken);

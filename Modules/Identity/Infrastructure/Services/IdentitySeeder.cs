@@ -6,8 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Identity.Infrastructure.Services;
-
-// TODO: Remove this when in production
 public static class IdentitySeeder
 {
     public static async Task SeedRolesAndAdminAsync(IServiceProvider serviceProvider)

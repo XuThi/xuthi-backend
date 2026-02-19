@@ -1,6 +1,4 @@
 namespace Promotion.Features.Vouchers.GetVouchers;
-
-// TODO: Why tf is IsActive = null the hell ?
 public record GetVouchersRequest(bool? IsActive = null, bool? ValidOnly = null);
 
 // Response

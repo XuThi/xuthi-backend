@@ -1,8 +1,6 @@
 namespace ProductCatalog.Features.Products.UpdateProduct;
 using ProductCatalog.Features.Media;
 
-// TODO: Yes try catch blocks again
-
 public record UpdateProductCommand(
     Guid Id, 
     UpdateProductRequest Request, 
@@ -179,12 +177,17 @@ internal class UpdateProductHandler(
         // ---- Upload new images via file upload ----
         if (command.NewImages?.Count > 0)
         {
-            foreach (var file in command.NewImages)
-            {
-                var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
-                if (!AllowedExtensions.Contains(extension))
-                    continue;
+            var validFiles = command.NewImages
+                .Where(file => AllowedExtensions.Contains(Path.GetExtension(file.FileName).ToLowerInvariant()))
+                .ToList();
 
+            if (validFiles.Count == 0)
+            {
+                throw new InvalidOperationException("Định dạng ảnh không được hỗ trợ. Chỉ chấp nhận: jpg, jpeg, png, webp, gif.");
+            }
+
+            foreach (var file in validFiles)
+            {
                 var uploadResult = await cloudinaryMediaService.UploadImageAsync(
                     file,
                     "products",
@@ -300,18 +303,7 @@ internal class UpdateProductHandler(
         }
 
         product.UpdatedAt = now;
-        try
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateConcurrencyException ex)
-        {
-            var resolved = await ResolveConcurrencyConflictsAsync(ex, cancellationToken);
-            if (!resolved)
-                throw;
-
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
+        await dbContext.SaveChangesAsync(cancellationToken);
 
         if (pendingOptionSelectionUpdates.Count > 0)
         {
@@ -350,12 +342,14 @@ internal class UpdateProductHandler(
             }
         }
 
-        var imageUrls = product.Images
+        var imageUrls = await dbContext.ProductImages
+            .Where(x => x.ProductId == product.Id)
+            .Include(x => x.Image)
+            .Where(x => x.Image != null)
             .OrderBy(x => x.SortOrder)
-            .Select(x => x.Image?.Url)
+            .Select(x => x.Image!.Url)
             .Where(url => !string.IsNullOrWhiteSpace(url))
-            .Select(url => url!)
-            .ToList();
+            .ToListAsync(cancellationToken);
 
         return new UpdateProductResult(
             product.Id,
@@ -368,46 +362,6 @@ internal class UpdateProductHandler(
             product.UpdatedAt,
             imageUrls
         );
-    }
-
-    private static async Task<bool> ResolveConcurrencyConflictsAsync(
-        DbUpdateConcurrencyException exception,
-        CancellationToken cancellationToken)
-    {
-        var resolvedAny = false;
-
-        foreach (var entry in exception.Entries)
-        {
-            if (entry.State == EntityState.Deleted)
-            {
-                var databaseValues = await entry.GetDatabaseValuesAsync(cancellationToken);
-                if (databaseValues is null)
-                {
-                    entry.State = EntityState.Detached;
-                    resolvedAny = true;
-                    continue;
-                }
-
-                entry.OriginalValues.SetValues(databaseValues);
-                resolvedAny = true;
-                continue;
-            }
-
-            if (entry.State == EntityState.Modified)
-            {
-                var databaseValues = await entry.GetDatabaseValuesAsync(cancellationToken);
-                if (databaseValues is null)
-                    return false;
-
-                entry.OriginalValues.SetValues(databaseValues);
-                resolvedAny = true;
-                continue;
-            }
-
-            return false;
-        }
-
-        return resolvedAny;
     }
 
     private static string GenerateSlug(string name) =>

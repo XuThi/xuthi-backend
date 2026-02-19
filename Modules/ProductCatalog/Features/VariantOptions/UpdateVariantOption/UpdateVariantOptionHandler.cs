@@ -3,8 +3,6 @@ using ProductCatalog.Features.VariantOptions.GetVariantOptions;
 
 namespace ProductCatalog.Features.VariantOptions.UpdateVariantOption;
 
-// TODO: This look sus ngl
-
 public record UpdateVariantOptionRequest(string? Name, string? DisplayType, List<string>? Values);
 public record UpdateVariantOptionCommand(string Id, UpdateVariantOptionRequest Request) : ICommand<VariantOptionResult>;
 

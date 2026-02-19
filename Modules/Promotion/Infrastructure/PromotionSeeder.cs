@@ -67,21 +67,13 @@ public static class PromotionSeeder
                 .Take(6)
                 .ToListAsync();
 
-            var bannerUrlBlackFriday = products.FirstOrDefault()?
-                .Images.OrderBy(i => i.SortOrder)
-                .FirstOrDefault()?.Image.Url;
-
-            var bannerUrlDouble11 = products.Skip(1).FirstOrDefault()?
-                .Images.OrderBy(i => i.SortOrder)
-                .FirstOrDefault()?.Image.Url ?? bannerUrlBlackFriday;
-
             var blackFriday = new SaleCampaign
             {
                 Id = Guid.NewGuid(),
                 Name = "Black Friday",
                 Slug = "black-friday",
                 Description = "Uu dai cuc soc cho mua sam Black Friday",
-                BannerImageUrl = bannerUrlBlackFriday,
+                BannerImageUrl = "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/banner.jpg?alt=media&token=913e4ead-a710-4b1d-9111-1be0a973106a",
                 Type = SaleCampaignType.SeasonalSale,
                 StartDate = now.AddDays(-1),
                 EndDate = now.AddDays(14),
@@ -95,7 +87,7 @@ public static class PromotionSeeder
                 Name = "11.11 Mega Sale",
                 Slug = "11-11-mega-sale",
                 Description = "Giam gia dac biet ngay 11.11",
-                BannerImageUrl = bannerUrlDouble11,
+                BannerImageUrl = "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/banner-double11.jpg?alt=media&token=913e4ead-a710-4b1d-9111-1be0a973106a",
                 Type = SaleCampaignType.SeasonalSale,
                 StartDate = now.AddDays(-1),
                 EndDate = now.AddDays(7),

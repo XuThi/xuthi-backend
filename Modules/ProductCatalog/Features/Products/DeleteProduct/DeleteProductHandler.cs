@@ -1,8 +1,6 @@
 namespace ProductCatalog.Features.Products.DeleteProduct;
 using ProductCatalog.Features.Media;
 
-// TODO: Figure out why the fuck do we do Raw SQL here
-
 public record DeleteProductCommand(Guid Id) : ICommand<bool>;
 
 internal class DeleteProductHandler(
@@ -12,9 +10,9 @@ internal class DeleteProductHandler(
 {
     public async Task<bool> Handle(DeleteProductCommand command, CancellationToken cancellationToken)
     {
-        var hasOrderReferences = await dbContext.Database
-            .SqlQuery<int>($"SELECT 1 FROM \"OrderItems\" WHERE \"ProductId\" = {command.Id} LIMIT 1")
-            .AnyAsync(cancellationToken);
+        var hasOrderReferences = await dbContext.OrderItemProductReferences
+            .AsNoTracking()
+            .AnyAsync(x => x.ProductId == command.Id, cancellationToken);
 
         if (hasOrderReferences)
             throw new InvalidOperationException("Không thể xoá sản phẩm vì đã phát sinh trong đơn hàng.");
