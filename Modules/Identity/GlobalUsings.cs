@@ -1,6 +1,6 @@
-global using Identity.Infrastructure.Entity;
-global using Identity.Infrastructure.Data;
-global using Identity.Infrastructure.Services;
+global using Identity.Users.Models;
+global using Identity.Data;
+global using Identity.Users.Services;
 
 global using Microsoft.EntityFrameworkCore;
 global using Microsoft.AspNetCore.Builder;

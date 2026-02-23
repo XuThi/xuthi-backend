@@ -1,8 +1,8 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace Customer.Infrastructure.Data.Migrations
+namespace Customer.Data.Migrations
 {
     /// <inheritdoc />
     public partial class Customerv2 : Migration
@@ -36,3 +36,4 @@ namespace Customer.Infrastructure.Data.Migrations
         }
     }
 }
+

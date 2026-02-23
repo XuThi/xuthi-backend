@@ -1,7 +1,16 @@
-﻿global using ProductCatalog.Infrastructure.Entity;
-global using ProductCatalog.Infrastructure.Dtos;
-global using ProductCatalog.Infrastructure.Data;
-global using ProductCatalog.Events;
+﻿// DDD aggregate-rooted models
+global using ProductCatalog.Products.Models;
+global using ProductCatalog.Products.Dtos;
+global using ProductCatalog.Products.Events;
+global using ProductCatalog.Brands.Models;
+global using ProductCatalog.Brands.Dtos;
+global using ProductCatalog.Categories.Models;
+global using ProductCatalog.Categories.Dtos;
+global using ProductCatalog.Groups.Models;
+global using ProductCatalog.Groups.Dtos;
+global using ProductCatalog.VariantOptions.Models;
+global using ProductCatalog.VariantOptions.Dtos;
+global using ProductCatalog.Data;
 
 global using Microsoft.EntityFrameworkCore;
 global using Microsoft.EntityFrameworkCore.Metadata.Builders;

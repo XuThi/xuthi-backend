@@ -1,18 +1,19 @@
-using Identity.Features.Auth.GetCurrentUser;
-using Identity.Features.Auth.Login;
-using Identity.Features.Auth.LoginFacebook;
-using Identity.Features.Auth.LoginGoogle;
-using Identity.Features.Auth.Logout;
-using Identity.Features.Auth.OAuthCallback;
-using Identity.Features.Auth.Register;
-using Identity.Features.Auth.ResendVerification;
-using Identity.Features.Auth.VerifyEmail;
-using Identity.Infrastructure.Data;
-using Identity.Infrastructure.Entity;
-using Identity.Infrastructure.Services;
+using Identity.Users.Features.GetCurrentUser;
+using Identity.Users.Features.Login;
+using Identity.Users.Features.LoginFacebook;
+using Identity.Users.Features.LoginGoogle;
+using Identity.Users.Features.Logout;
+using Identity.Users.Features.OAuthCallback;
+using Identity.Users.Features.Register;
+using Identity.Users.Features.ResendVerification;
+using Identity.Users.Features.VerifyEmail;
+using Identity.Data;
+using Identity.Users.Models;
+using Identity.Users.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -23,8 +24,13 @@ public static class IdentityModule
 {
     public static IHostApplicationBuilder AddIdentityModule(this IHostApplicationBuilder builder)
     {
-        // Add IdentityDbContext with Aspire (same database as other modules)
-        builder.AddNpgsqlDbContext<IdentityDbContext>("appdata");
+        // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
+        builder.Services.AddDbContext<IdentityDbContext>(options =>
+        {
+            options.UseNpgsql(builder.Configuration.GetConnectionString("appdata"));
+            options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+        });
+        builder.EnrichNpgsqlDbContext<IdentityDbContext>();
         
         // Add Identity services
         builder.Services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>

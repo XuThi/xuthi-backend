@@ -1,28 +1,28 @@
 using Cart;
-using Cart.Infrastructure.Data;
+using Cart.Data;
 using Carter;
 using Core.Exceptions.Handler;
 using Core.Extensions;
 using Customer;
-using Customer.Infrastructure.Data;
+using Customer.Data;
 using Identity;
-using Identity.Infrastructure.Data;
-using Identity.Infrastructure.Entity;
+using Identity.Data;
+using Identity.Users.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Order;
-using Order.Infrastructure.Data;
+using Order.Data;
 using ProductCatalog;
-using ProductCatalog.Infrastructure.Data;
+using ProductCatalog.Data;
 using Promotion;
-using Promotion.Infrastructure.Data;
+using Promotion.Data;
 using Scalar.AspNetCore;
 using System.Text;
-using Identity.Infrastructure.Services;
-using Promotion.Infrastructure;
-using ProductCatalog.Infrastructure;
+using Identity.Users.Services;
+using Promotion.Data.Seed;
+using ProductCatalog.Data.Seed;
 
 var builder = WebApplication.CreateBuilder(args);
 

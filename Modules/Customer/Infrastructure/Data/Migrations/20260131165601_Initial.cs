@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace Customer.Infrastructure.Data.Migrations
+namespace Customer.Data.Migrations
 {
     /// <inheritdoc />
     public partial class Initial : Migration
@@ -132,3 +132,4 @@ namespace Customer.Infrastructure.Data.Migrations
         }
     }
 }
+

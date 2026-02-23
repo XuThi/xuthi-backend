@@ -1,6 +1,8 @@
 ﻿using Core.Behaviors;
+using Core.DDD;
 using FluentValidation;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 
@@ -14,12 +16,15 @@ public static class MediatRExtensions
         services.AddMediatR(config =>
         {
             config.RegisterServicesFromAssemblies(assemblies);
-            
+
             config.AddOpenBehavior(typeof(ValidationBehavior<,>));
             config.AddOpenBehavior(typeof(TransactionBehavior<,>));
         });
 
         services.AddValidatorsFromAssemblies(assemblies);
+
+        // Register DDD domain events interceptor for all DbContexts
+        services.AddScoped<DispatchDomainEventsInterceptor>();
 
         return services;
     }

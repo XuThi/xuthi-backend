@@ -1,5 +1,5 @@
-global using Order.Infrastructure.Entity;
-global using Order.Infrastructure.Data;
+global using Order.Orders.Models;
+global using Order.Data;
 
 global using Microsoft.EntityFrameworkCore;
 global using Microsoft.AspNetCore.Builder;

@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace ProductCatalog.Infrastructure.Data.Migrations
+namespace ProductCatalog.Data.Migrations
 {
     /// <inheritdoc />
     public partial class ProductCatalogV2 : Migration

@@ -2,7 +2,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace ProductCatalog.Infrastructure.Data.Migrations
+namespace ProductCatalog.Data.Migrations
 {
     /// <inheritdoc />
     public partial class SyncProductCatalogModel_20260218 : Migration

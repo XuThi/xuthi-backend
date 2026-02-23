@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace Order.Infrastructure.Data.Migrations
+namespace Order.Data.Migrations
 {
     /// <inheritdoc />
     public partial class Initial : Migration
@@ -109,3 +109,4 @@ namespace Order.Infrastructure.Data.Migrations
         }
     }
 }
+

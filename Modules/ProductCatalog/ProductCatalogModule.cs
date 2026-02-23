@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using ProductCatalog.Features.Media;
-using ProductCatalog.Infrastructure;
-using ProductCatalog.Infrastructure.Data;
+using ProductCatalog.Data;
+using ProductCatalog.Products.Features.Media;
 
 namespace ProductCatalog;
 
@@ -11,8 +13,13 @@ public static class ProductCatalogModule
 {
     public static IServiceCollection AddProductCatalogModule(this IHostApplicationBuilder builder)
     {
-        // Add DbContext with Aspire PostgreSQL integration
-        builder.AddNpgsqlDbContext<ProductCatalogDbContext>("appdata");
+        // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
+        builder.Services.AddDbContext<ProductCatalogDbContext>(options =>
+        {
+            options.UseNpgsql(builder.Configuration.GetConnectionString("appdata"));
+            options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+        });
+        builder.EnrichNpgsqlDbContext<ProductCatalogDbContext>();
         builder.Services.AddScoped<ICloudinaryMediaService, CloudinaryMediaService>();
 
         return builder.Services;
@@ -20,19 +27,6 @@ public static class ProductCatalogModule
 
     public static WebApplication UseProductCatalogModule(this WebApplication app)
     {
-        // Seed data in development
-        if (app.Environment.IsDevelopment())
-        {
-            using var scope = app.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>();
-            
-            // Ensure database is created and apply migrations
-            db.Database.EnsureCreated();
-            
-            // Seed data - runs async but we block for startup
-            ProductCatalogSeeder.SeedAsync(app.Services).GetAwaiter().GetResult();
-        }
-        
         return app;
     }
 }

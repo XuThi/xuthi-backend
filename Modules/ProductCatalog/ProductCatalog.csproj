@@ -21,9 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Features\Products\DeleteProduct\" />
-    <Folder Include="Features\Products\UpdateProduct\" />
-    <Folder Include="EventHandlers\" />
+    <Folder Include="Products\EventHandlers\" />
   </ItemGroup>
 
 </Project>

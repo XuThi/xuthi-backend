@@ -1,9 +1,14 @@
-global using MediatR;
-global using Carter;
-global using FluentValidation;
+global using Customer.Customers.Models;
+global using Customer.Data;
+
 global using Microsoft.EntityFrameworkCore;
 global using Microsoft.AspNetCore.Builder;
 global using Microsoft.AspNetCore.Http;
 global using Microsoft.AspNetCore.Routing;
-global using Microsoft.Extensions.DependencyInjection;
+
 global using Contracts.CQRS;
+global using MediatR;
+global using Carter;
+global using FluentValidation;
+
+global using System.ComponentModel.DataAnnotations;

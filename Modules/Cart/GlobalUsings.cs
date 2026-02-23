@@ -1,3 +1,6 @@
+global using Cart.ShoppingCarts.Models;
+global using Cart.ShoppingCarts.Dtos;
+global using Cart.Data;
 global using MediatR;
 global using Carter;
 global using Mapster;

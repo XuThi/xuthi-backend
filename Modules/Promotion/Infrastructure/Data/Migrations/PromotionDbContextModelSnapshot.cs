@@ -4,11 +4,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using Promotion.Infrastructure.Data;
+using Promotion.Data;
 
 #nullable disable
 
-namespace Promotion.Infrastructure.Data.Migrations
+namespace Promotion.Data.Migrations
 {
     [DbContext(typeof(PromotionDbContext))]
     partial class PromotionDbContextModelSnapshot : ModelSnapshot
