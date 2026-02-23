@@ -22,6 +22,18 @@ namespace ProductCatalog.Infrastructure.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("ProductCatalog.Infrastructure.Data.OrderItemProductReference", b =>
+                {
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ProductId");
+
+                    b.ToTable("OrderItems", null, t =>
+                        {
+                            t.ExcludeFromMigrations();
+                        });
+                });
+
             modelBuilder.Entity("ProductCatalog.Infrastructure.Entity.Brand", b =>
                 {
                     b.Property<Guid>("Id")

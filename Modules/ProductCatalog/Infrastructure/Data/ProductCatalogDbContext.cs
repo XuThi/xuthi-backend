@@ -2,6 +2,7 @@
 
 namespace ProductCatalog.Infrastructure.Data;
 
+
 public class ProductCatalogDbContext(DbContextOptions<ProductCatalogDbContext> options) : DbContext(options)
 {
     public DbSet<Product> Products => Set<Product>();
@@ -17,6 +18,7 @@ public class ProductCatalogDbContext(DbContextOptions<ProductCatalogDbContext> o
     public DbSet<VariantOptionValue> VariantOptionValues => Set<VariantOptionValue>();
     public DbSet<ProductVariantOption> ProductVariantOptions => Set<ProductVariantOption>();
     public DbSet<VariantOptionSelection> VariantOptionSelections => Set<VariantOptionSelection>();
+    public DbSet<OrderItemProductReference> OrderItemProductReferences => Set<OrderItemProductReference>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -112,5 +114,18 @@ public class ProductCatalogDbContext(DbContextOptions<ProductCatalogDbContext> o
         {
             e.HasKey(vos => new { vos.VariantId, vos.VariantOptionId });
         });
+
+        // Read model for cross-module integrity checks
+        modelBuilder.Entity<OrderItemProductReference>(e =>
+        {
+            e.HasNoKey();
+            e.ToTable("OrderItems", t => t.ExcludeFromMigrations());
+            e.Property(x => x.ProductId).HasColumnName("ProductId");
+        });
     }
+}
+
+public class OrderItemProductReference
+{
+    public Guid ProductId { get; set; }
 }

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -82,6 +84,7 @@ public static class ProductCatalogSeeder
         
         // Product seed data from TypeScript
         var products = GetProductSeedData();
+        var random = new Random(20260219);
         
         foreach (var (productData, index) in products.Select((p, i) => (p, i)))
         {
@@ -107,6 +110,17 @@ public static class ProductCatalogSeeder
                 VariantOptionId = "size",
                 SortOrder = 1
             });
+
+            var useColorOption = index < 3;
+            if (useColorOption)
+            {
+                product.VariantOptions.Add(new ProductVariantOption
+                {
+                    ProductId = productId,
+                    VariantOptionId = "color",
+                    SortOrder = 2
+                });
+            }
             
             // Add images
             var sortOrder = 0;
@@ -134,33 +148,58 @@ public static class ProductCatalogSeeder
             
             // Create one variant per size
             var sizes = new[] { "34", "35", "36", "37", "38" };
+            var colors = useColorOption ? new[] { "Đen", "Trắng", "Đỏ" } : new[] { string.Empty };
             foreach (var size in sizes)
             {
-                var variantId = Guid.NewGuid();
-                var sku = $"XT-{productData.SkuPrefix}-{size}";
-                
-                product.Variants.Add(new Variant
+                foreach (var color in colors)
                 {
-                    Id = variantId,
-                    ProductId = productId,
-                    Sku = sku,
-                    BarCode = sku, // Use SKU as barcode for simplicity
-                    Price = productData.Price,
-                    Description = $"{productData.Name} - Size {size}",
-                    IsActive = true,
-                    IsDeleted = false,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow,
-                    OptionSelections =
-                    [
-                        new VariantOptionSelection
+                    var variantId = Guid.NewGuid();
+                    var sku = useColorOption
+                        ? $"XT-{productData.SkuPrefix}-{size}-{GenerateSkuSegment(color)}"
+                        : $"XT-{productData.SkuPrefix}-{size}";
+
+                    var stockQuantity = random.NextDouble() < 0.2 ? 0 : random.Next(3, 26);
+                    var compareAtPrice = Math.Round(productData.Price * 1.15m, 0, MidpointRounding.AwayFromZero);
+
+                    var selections = new List<VariantOptionSelection>
+                    {
+                        new()
                         {
                             VariantId = variantId,
                             VariantOptionId = "size",
                             Value = size
                         }
-                    ]
-                });
+                    };
+
+                    if (useColorOption)
+                    {
+                        selections.Add(new VariantOptionSelection
+                        {
+                            VariantId = variantId,
+                            VariantOptionId = "color",
+                            Value = color
+                        });
+                    }
+
+                    product.Variants.Add(new Variant
+                    {
+                        Id = variantId,
+                        ProductId = productId,
+                        Sku = sku,
+                        BarCode = sku, // Use SKU as barcode for simplicity
+                        Price = productData.Price,
+                        CompareAtPrice = compareAtPrice,
+                        StockQuantity = stockQuantity,
+                        Description = useColorOption
+                            ? $"{productData.Name} - Size {size} - {color}"
+                            : $"{productData.Name} - Size {size}",
+                        IsActive = true,
+                        IsDeleted = false,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                        OptionSelections = selections
+                    });
+                }
             }
             
             db.Products.Add(product);
@@ -190,6 +229,28 @@ public static class ProductCatalogSeeder
             .Replace("(", "").Replace(")", "");
         
         return slug;
+    }
+
+    private static string GenerateSkuSegment(string value)
+    {
+        return value
+            .Normalize(NormalizationForm.FormD)
+            .Where(ch => CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+            .Select(ch => ch is 'đ' or 'Đ' ? 'd' : ch)
+            .Aggregate(new StringBuilder(), (sb, ch) =>
+            {
+                if (char.IsLetterOrDigit(ch))
+                {
+                    sb.Append(char.ToUpperInvariant(ch));
+                }
+                else if (sb.Length > 0 && sb[^1] != '-')
+                {
+                    sb.Append('-');
+                }
+                return sb;
+            })
+            .ToString()
+            .Trim('-');
     }
     
     private static List<ProductSeedData> GetProductSeedData() =>
