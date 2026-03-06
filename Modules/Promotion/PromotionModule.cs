@@ -14,7 +14,7 @@ public static class PromotionModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<PromotionDbContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("appdata"));
+            options.UseSqlServer(builder.Configuration.GetConnectionString("DatabaseConnection"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         builder.EnrichSqlServerDbContext<PromotionDbContext>();
