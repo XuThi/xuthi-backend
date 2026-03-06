@@ -177,11 +177,6 @@ var app = builder.Build();
     
     // Seed roles and admin user (idempotent - safe to run every startup)
     await IdentitySeeder.SeedRolesAndAdminAsync(app.Services);
-}
-
-// Seed sample data only in development
-if (app.Environment.IsDevelopment())
-{
     await ProductCatalogSeeder.SeedAsync(app.Services);
     await PromotionSeeder.SeedAsync(app.Services);
 }
