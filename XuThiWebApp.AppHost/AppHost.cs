@@ -1,13 +1,11 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-var cache = builder.AddRedis("cache");
-
-var postgres = builder.AddPostgres("db")
-    .AddDatabase("appdata");
+var sql = builder.AddSqlServer("sql");
+var sqldb = sql.AddDatabase("appdata");
 
 var apiService = builder.AddProject<Projects.XuThiWebApp_ApiService>("apiservice")
-    .WithReference(postgres)
-    .WaitFor(postgres)
+    .WithReference(sqldb)
+    .WaitFor(sqldb)
     .WithHttpHealthCheck("/health");
 
 var frontend = builder.AddJavaScriptApp("xuthi-frontend", "../xuthi-frontend", "dev")

@@ -43,6 +43,13 @@ public class CustomerOrder : Aggregate<Guid>
     public DateTime? CancelledAt { get; set; }
     public string? CancellationReason { get; set; }
     
+    // Payment
+    public long? PayOsOrderCode { get; set; } // PayOS order code for online payments
+    public string? PaymentLinkId { get; set; } // PayOS payment link ID
+    
+    // Stock reservation session key
+    public string? ReservationSessionKey { get; set; }
+    
     // Navigation
     public List<OrderItem> Items { get; set; } = [];
 }
@@ -70,7 +77,5 @@ public enum PaymentMethod
 {
     CashOnDelivery = 1,   // COD - common in Vietnam
     BankTransfer = 2,     // Manual bank transfer
-    MoMo = 3,             // MoMo wallet
-    ZaloPay = 4,          // ZaloPay
-    VNPay = 5             // VNPay gateway
+    PayOS = 3             // PayOS online payment
 }

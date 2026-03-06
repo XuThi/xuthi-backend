@@ -8,7 +8,7 @@ public class PromotionDesignTimeDbContextFactory : IDesignTimeDbContextFactory<P
     public PromotionDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<PromotionDbContext>();
-        optionsBuilder.UseNpgsql("Host=localhost;Database=promotion;Username=postgres;Password=postgres");
+        optionsBuilder.UseSqlServer("Server=localhost;Database=promotion;Trusted_Connection=True;TrustServerCertificate=True");
 
         return new PromotionDbContext(optionsBuilder.Options);
     }

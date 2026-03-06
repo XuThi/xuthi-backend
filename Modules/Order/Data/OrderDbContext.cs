@@ -27,6 +27,9 @@ public class OrderDbContext(
             entity.HasIndex(e => e.OrderNumber).IsUnique();
             entity.HasIndex(e => e.CustomerEmail);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.PayOsOrderCode)
+                .IsUnique()
+                .HasFilter("\"PayOsOrderCode\" IS NOT NULL");
 
             // Base class property mappings
             entity.Ignore(e => e.CreatedBy);

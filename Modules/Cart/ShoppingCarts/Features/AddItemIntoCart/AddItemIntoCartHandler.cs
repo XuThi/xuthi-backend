@@ -67,6 +67,11 @@ internal class AddToCartHandler(CartDbContext cartDb, ProductCatalogDbContext ca
         }
         else
         {
+            // Validate quantity for new items
+            if (cmd.Quantity > variant.StockQuantity)
+                throw new InvalidOperationException(
+                    $"Không đủ tồn kho. Chỉ còn {variant.StockQuantity} sản phẩm.");
+
             // Add new item
             var imageUrl = product.Images.OrderBy(i => i.SortOrder).FirstOrDefault()?.Image.Url;
 

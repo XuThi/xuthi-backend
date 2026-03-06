@@ -24,9 +24,13 @@ public record CheckoutRequest(
     List<CheckoutItem> Items,
 
     // Optional voucher
-    string? VoucherCode
+    string? VoucherCode,
+
+    // PayOS redirect URLs (required for PayOS payment)
+    string? ReturnUrl = null,
+    string? CancelUrl = null
 );
-public record CheckoutResponse(Guid OrderId, string OrderNumber, decimal Total, string Status);
+public record CheckoutResponse(Guid OrderId, string OrderNumber, decimal Total, string Status, string? PaymentUrl = null);
 
 public class CheckoutEndpoint : ICarterModule
 {

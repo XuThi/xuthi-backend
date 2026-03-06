@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using ProductCatalog.Products.Events;
 using ProductCatalog.Products.Features.Media;
 
 namespace ProductCatalog.Products.Features.CreateProduct;
@@ -9,6 +10,7 @@ public record CreateProductRequest(
     Guid CategoryId,
     Guid BrandId,
     bool IsActive = true,
+    bool NotifySubscribers = false,
     List<CreateVariantInput>? Variants = null,
     // Pre-uploaded image URLs (e.g. from Cloudinary)
     List<string>? Images = null
@@ -177,6 +179,15 @@ internal class CreateProductHandler(
         }
 
         dbContext.Products.Add(product);
+
+        // Raise domain event for subscribers notification (only if opted in)
+        if (request.NotifySubscribers)
+        {
+            var firstImageUrl = imageUrls.Count > 0 ? imageUrls[0] : null;
+            var basePrice = product.Variants.Count > 0 ? product.Variants.Min(v => v.Price) : (decimal?)null;
+            product.AddDomainEvent(new ProductCreatedEvent(product.Id, product.Name, firstImageUrl, product.UrlSlug, basePrice));
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return new CreateProductResult(product.Id, variantIds, imageUrls);
@@ -184,9 +195,17 @@ internal class CreateProductHandler(
 
     private static string GenerateSlug(string name)
     {
-        return name.ToLowerInvariant()
-            .Replace(" ", "-")
-            .Replace(".", "")
-            .Replace(",", "");
+        var slug = name.Replace("đ", "d").Replace("Đ", "d")
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in slug)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
+        }
+        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        return slug;
     }
 }

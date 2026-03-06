@@ -1,3 +1,5 @@
+using Customer.Data;
+using Customer.Customers.Models;
 using ProductCatalog.Data;
 
 namespace Order.Orders.Features.UpdateOrderStatus;
@@ -18,7 +20,8 @@ public record UpdateOrderStatusResult(
 
 internal class UpdateOrderStatusHandler(
     OrderDbContext orderDb,
-    ProductCatalogDbContext catalogDb)
+    ProductCatalogDbContext catalogDb,
+    CustomerDbContext customerDb)
     : ICommandHandler<UpdateOrderStatusCommand, UpdateOrderStatusResult>
 {
     public async Task<UpdateOrderStatusResult> Handle(UpdateOrderStatusCommand command, CancellationToken cancellationToken)
@@ -40,7 +43,27 @@ internal class UpdateOrderStatusHandler(
         {
             order.CancelledAt = DateTime.UtcNow;
             order.CancellationReason = command.Reason;
-            // Note: No stock restoration in simplified design
+
+            // Deduct customer spending stats and recalculate tier
+            if (order.CustomerId.HasValue)
+            {
+                var customer = await customerDb.Customers
+                    .FirstOrDefaultAsync(c => c.Id == order.CustomerId.Value, cancellationToken);
+
+                if (customer is not null)
+                {
+                    customer.TotalSpent = Math.Max(0, customer.TotalSpent - order.Total);
+                    customer.TotalOrders = Math.Max(0, customer.TotalOrders - 1);
+                    customer.Tier = customer.TotalSpent switch
+                    {
+                        >= 10_000_000m => CustomerTier.Platinum,
+                        >= 5_000_000m => CustomerTier.Gold,
+                        >= 1_000_000m => CustomerTier.Silver,
+                        _ => CustomerTier.Standard
+                    };
+                    await customerDb.SaveChangesAsync(cancellationToken);
+                }
+            }
         }
 
         // Update timestamps based on new status

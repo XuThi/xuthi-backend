@@ -7,15 +7,8 @@ public class CartDesignTimeDbContextFactory : IDesignTimeDbContextFactory<CartDb
 {
     public CartDbContext CreateDbContext(string[] args)
     {
-        var connectionString = Environment.GetEnvironmentVariable("CART_DB_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            throw new InvalidOperationException(
-                "Environment variable 'CART_DB_CONNECTION' must be set for design-time CartDbContext creation.");
-        }
-
         var optionsBuilder = new DbContextOptionsBuilder<CartDbContext>();
-        optionsBuilder.UseNpgsql(connectionString);
+        optionsBuilder.UseSqlServer("Server=localhost;Database=cart;Trusted_Connection=True;TrustServerCertificate=True");
 
         return new CartDbContext(optionsBuilder.Options);
     }

@@ -2,13 +2,13 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Promotion.Data;
 
 #nullable disable
 
-namespace Promotion.Data.Migrations
+namespace Promotion.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(PromotionDbContext))]
     partial class PromotionDbContextModelSnapshot : ModelSnapshot
@@ -18,63 +18,69 @@ namespace Promotion.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasAnnotation("ProductVersion", "10.0.2")
-                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+                .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
-            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+            SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.SaleCampaign", b =>
+            modelBuilder.Entity("Promotion.SaleCampaigns.Models.SaleCampaign", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BannerImagePublicId")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("BannerImageUrl")
                         .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
+                        .HasColumnType("nvarchar(500)");
 
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("CreatedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("CreatedAt");
 
                     b.Property<string>("Description")
                         .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
+                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<string>("Discriminator")
                         .IsRequired()
                         .HasMaxLength(13)
-                        .HasColumnType("character varying(13)");
+                        .HasColumnType("nvarchar(13)");
 
                     b.Property<DateTime>("EndDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("datetime2");
 
                     b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
+                        .HasColumnType("bit");
 
                     b.Property<bool>("IsFeatured")
-                        .HasColumnType("boolean");
+                        .HasColumnType("bit");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("Slug")
                         .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("datetime2");
 
                     b.Property<int>("Type")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("datetime2")
+                        .HasColumnName("UpdatedAt");
 
                     b.HasKey("Id");
 
                     b.HasIndex("Slug")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[Slug] IS NOT NULL");
 
                     b.ToTable("SaleCampaigns", (string)null);
 
@@ -83,48 +89,49 @@ namespace Promotion.Data.Migrations
                     b.UseTphMappingStrategy();
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.SaleCampaignItem", b =>
+            modelBuilder.Entity("Promotion.SaleCampaigns.Models.SaleCampaignItem", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<decimal?>("DiscountPercentage")
                         .HasPrecision(5, 2)
-                        .HasColumnType("numeric(5,2)");
+                        .HasColumnType("decimal(5,2)");
 
                     b.Property<string>("Discriminator")
                         .IsRequired()
                         .HasMaxLength(21)
-                        .HasColumnType("character varying(21)");
+                        .HasColumnType("nvarchar(21)");
 
                     b.Property<int?>("MaxQuantity")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<decimal?>("OriginalPrice")
                         .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<Guid>("ProductId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("SaleCampaignId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<decimal>("SalePrice")
                         .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<int>("SoldQuantity")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<Guid?>("VariantId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
 
                     b.HasIndex("SaleCampaignId", "ProductId", "VariantId")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[VariantId] IS NOT NULL");
 
                     b.ToTable("SaleCampaignItems", (string)null);
 
@@ -133,81 +140,83 @@ namespace Promotion.Data.Migrations
                     b.UseTphMappingStrategy();
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.Voucher", b =>
+            modelBuilder.Entity("Promotion.Vouchers.Models.Voucher", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid?>("ApplicableCategoryId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("ApplicableProductIds")
-                        .HasColumnType("text");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<bool>("CanCombineWithOtherVouchers")
-                        .HasColumnType("boolean");
+                        .HasColumnType("bit");
 
                     b.Property<bool>("CanCombineWithSalePrice")
-                        .HasColumnType("boolean");
+                        .HasColumnType("bit");
 
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
+                        .HasColumnType("nvarchar(50)");
 
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("CreatedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("CreatedAt");
 
                     b.Property<int>("CurrentUsageCount")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<string>("Description")
                         .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<decimal>("DiscountValue")
                         .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("EndDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("datetime2");
 
                     b.Property<bool>("FirstPurchaseOnly")
-                        .HasColumnType("boolean");
+                        .HasColumnType("bit");
 
                     b.Property<string>("InternalNote")
                         .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
+                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
+                        .HasColumnType("bit");
 
                     b.Property<int?>("MaxUsageCount")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<int?>("MaxUsagePerCustomer")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<decimal?>("MaximumDiscountAmount")
                         .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<int?>("MinimumCustomerTier")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
                     b.Property<decimal?>("MinimumOrderAmount")
                         .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("datetime2");
 
                     b.Property<int>("Type")
-                        .HasColumnType("integer");
+                        .HasColumnType("int");
 
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("UpdatedAt");
 
                     b.HasKey("Id");
 
@@ -217,30 +226,30 @@ namespace Promotion.Data.Migrations
                     b.ToTable("Vouchers");
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.VoucherUsage", b =>
+            modelBuilder.Entity("Promotion.Vouchers.Models.VoucherUsage", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid?>("CustomerId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<decimal>("DiscountApplied")
                         .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<Guid>("OrderId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("SessionId")
-                        .HasColumnType("text");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTime>("UsedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("datetime2");
 
                     b.Property<Guid>("VoucherId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
 
@@ -251,26 +260,26 @@ namespace Promotion.Data.Migrations
                     b.ToTable("VoucherUsages");
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.FlashSale", b =>
+            modelBuilder.Entity("Promotion.SaleCampaigns.Models.FlashSale", b =>
                 {
-                    b.HasBaseType("Promotion.Infrastructure.Entity.SaleCampaign");
+                    b.HasBaseType("Promotion.SaleCampaigns.Models.SaleCampaign");
 
                     b.HasDiscriminator().HasValue("FlashSale");
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.FlashSaleItem", b =>
+            modelBuilder.Entity("Promotion.SaleCampaigns.Models.FlashSaleItem", b =>
                 {
-                    b.HasBaseType("Promotion.Infrastructure.Entity.SaleCampaignItem");
+                    b.HasBaseType("Promotion.SaleCampaigns.Models.SaleCampaignItem");
 
                     b.Property<Guid>("FlashSaleId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uniqueidentifier");
 
                     b.HasDiscriminator().HasValue("FlashSaleItem");
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.SaleCampaignItem", b =>
+            modelBuilder.Entity("Promotion.SaleCampaigns.Models.SaleCampaignItem", b =>
                 {
-                    b.HasOne("Promotion.Infrastructure.Entity.SaleCampaign", "SaleCampaign")
+                    b.HasOne("Promotion.SaleCampaigns.Models.SaleCampaign", "SaleCampaign")
                         .WithMany("Items")
                         .HasForeignKey("SaleCampaignId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -279,9 +288,9 @@ namespace Promotion.Data.Migrations
                     b.Navigation("SaleCampaign");
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.VoucherUsage", b =>
+            modelBuilder.Entity("Promotion.Vouchers.Models.VoucherUsage", b =>
                 {
-                    b.HasOne("Promotion.Infrastructure.Entity.Voucher", "Voucher")
+                    b.HasOne("Promotion.Vouchers.Models.Voucher", "Voucher")
                         .WithMany()
                         .HasForeignKey("VoucherId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -290,7 +299,7 @@ namespace Promotion.Data.Migrations
                     b.Navigation("Voucher");
                 });
 
-            modelBuilder.Entity("Promotion.Infrastructure.Entity.SaleCampaign", b =>
+            modelBuilder.Entity("Promotion.SaleCampaigns.Models.SaleCampaign", b =>
                 {
                     b.Navigation("Items");
                 });

@@ -9,6 +9,7 @@ public record CategoryItem(
     string Name,
     string UrlSlug,
     string? Description,
+    string? ImageUrl,
     Guid ParentCategoryId,
     int SortOrder,
     int ProductCount
@@ -35,6 +36,7 @@ internal class GetCategoriesHandler(ProductCatalogDbContext dbContext)
                 c.Name,
                 c.UrlSlug,
                 c.Description,
+                c.ImageUrl,
                 c.ParentCategoryId,
                 c.SortOrder,
                 dbContext.Products.Count(p => p.CategoryId == c.Id && !p.IsDeleted && p.IsActive)

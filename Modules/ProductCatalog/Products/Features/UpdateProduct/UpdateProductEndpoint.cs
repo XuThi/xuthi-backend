@@ -82,7 +82,7 @@ public class UpdateProductEndpoint : ICarterModule
                 });
             }
 
-            request ??= new UpdateProductRequest(null, null, null, null, null, null, null);
+            request ??= new UpdateProductRequest(null, null, null, null, null);
 
             var command = new UpdateProductCommand(id, request, images ?? [], removeImageIds ?? []);
             var result = await sender.Send(command);

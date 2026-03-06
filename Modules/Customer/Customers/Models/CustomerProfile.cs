@@ -32,8 +32,8 @@ public class CustomerProfile : Aggregate<Guid>
     };
     
     // Marketing preferences
-    public bool AcceptsMarketing { get; set; } = true;
-    public bool AcceptsSms { get; set; } = true;
+    public bool AcceptsMarketing { get; set; }
+    public bool AcceptsSms { get; set; }
     
     // Timestamps
     public DateTime? LastLoginAt { get; set; }

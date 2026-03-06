@@ -1,13 +1,15 @@
 using Customer.Customers.Features;
 using Customer.Customers.Features.AddCustomerOrder;
+using Order.Orders.Services;
 using ProductCatalog.Data;
+using ProductCatalog.Products.Services;
 using Promotion.Vouchers.Features.ValidateVoucher;
 using Promotion.Data;
 
 namespace Order.Orders.Features.Checkout;
 
 public record CheckoutCommand(CheckoutRequest Request) : ICommand<CheckoutResult>;
-public record CheckoutResult(Guid OrderId, string OrderNumber, decimal Total, string Status);
+public record CheckoutResult(Guid OrderId, string OrderNumber, decimal Total, string Status, string? PaymentUrl = null);
 public record CheckoutItem(Guid ProductId, Guid VariantId, int Quantity);
 
 public class CheckoutCommandValidator : AbstractValidator<CheckoutCommand>
@@ -35,6 +37,8 @@ internal class CheckoutHandler(
     OrderDbContext orderDb,
     ProductCatalogDbContext catalogDb,
     PromotionDbContext promotionDb,
+    IStockReservationService stockReservation,
+    IPaymentService paymentService,
     ISender sender)
     : ICommandHandler<CheckoutCommand, CheckoutResult>
 {
@@ -188,21 +192,65 @@ internal class CheckoutHandler(
             Items = orderItems
         };
 
-        // 5. Save order and deduct stock
+        // Raise domain event for notifications
+        order.AddDomainEvent(new Events.OrderCreatedEvent(
+            order.Id,
+            order.OrderNumber,
+            order.CustomerName,
+            order.CustomerEmail,
+            order.CustomerPhone,
+            order.ShippingAddress,
+            order.ShippingCity,
+            order.ShippingDistrict,
+            order.ShippingWard,
+            order.Subtotal,
+            order.DiscountAmount,
+            order.ShippingFee,
+            order.Total,
+            orderItems.Select(i => new Events.OrderCreatedEventItem(
+                i.ProductName, i.VariantDescription, i.Quantity, i.TotalPrice
+            )).ToList()
+        ));
+
+        // 5. Reserve stock (5-minute TTL — cleanup cronjob releases expired ones)
+        var sessionKey = $"order:{order.Id}";
+        order.ReservationSessionKey = sessionKey;
+
+        await stockReservation.ReserveStockAsync(
+            sessionKey,
+            req.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
+            TimeSpan.FromMinutes(5),
+            cancellationToken);
+
+        // 6. Save order
         orderDb.Orders.Add(order);
-
-        // Deduct stock from variants
-        foreach (var item in req.Items)
-        {
-            var variant = variants.First(v => v.Id == item.VariantId);
-            variant.StockQuantity -= item.Quantity;
-        }
-
         await orderDb.SaveChangesAsync(cancellationToken);
-        await catalogDb.SaveChangesAsync(cancellationToken);
         await promotionDb.SaveChangesAsync(cancellationToken);
 
-        // 6. Update customer stats if logged in
+        // 7. Handle payment based on method
+        string? paymentUrl = null;
+
+        if (req.PaymentMethod == PaymentMethod.PayOS)
+        {
+            // Create PayOS payment link
+            var returnUrl = req.ReturnUrl ?? "http://localhost:3000/checkout/success";
+            var cancelUrl = req.CancelUrl ?? "http://localhost:3000/checkout/cancel";
+
+            var payResult = await paymentService.CreatePaymentLinkAsync(
+                order, returnUrl, cancelUrl, cancellationToken);
+
+            order.PayOsOrderCode = payResult.OrderCode;
+            paymentUrl = payResult.CheckoutUrl;
+
+            await orderDb.SaveChangesAsync(cancellationToken);
+        }
+        else if (req.PaymentMethod == PaymentMethod.CashOnDelivery)
+        {
+            // COD: Confirm reservation immediately (stock is committed)
+            await stockReservation.ConfirmReservationsAsync(sessionKey, order.Id, cancellationToken);
+        }
+
+        // 8. Update customer stats if logged in
         if (req.CustomerId.HasValue)
         {
             // Calculate points: 1 point per 10,000 VND spent
@@ -220,7 +268,8 @@ internal class CheckoutHandler(
             order.Id,
             order.OrderNumber,
             order.Total,
-            order.Status.ToString()
+            order.Status.ToString(),
+            paymentUrl
         );
     }
 

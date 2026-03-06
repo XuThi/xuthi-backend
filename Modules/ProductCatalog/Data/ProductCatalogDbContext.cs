@@ -26,6 +26,7 @@ public class ProductCatalogDbContext(
     public DbSet<VariantOptionValue> VariantOptionValues => Set<VariantOptionValue>();
     public DbSet<ProductVariantOption> ProductVariantOptions => Set<ProductVariantOption>();
     public DbSet<VariantOptionSelection> VariantOptionSelections => Set<VariantOptionSelection>();
+    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
     public DbSet<OrderItemProductReference> OrderItemProductReferences => Set<OrderItemProductReference>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
@@ -119,6 +120,9 @@ public class ProductCatalogDbContext(
         {
             e.HasKey(v => v.Id);
             e.HasIndex(v => v.Sku).IsUnique();
+            // Optimistic concurrency: EF throws DbUpdateConcurrencyException if
+            // another transaction modified StockQuantity between our read and write.
+            e.Property(v => v.StockQuantity).IsConcurrencyToken();
             e.HasMany(v => v.OptionSelections).WithOne().HasForeignKey(os => os.VariantId);
             e.HasMany(v => v.Images).WithOne().HasForeignKey(vi => vi.VariantId);
             e.Ignore(v => v.CreatedBy);
@@ -170,6 +174,20 @@ public class ProductCatalogDbContext(
             e.HasNoKey();
             e.ToTable("OrderItems", t => t.ExcludeFromMigrations());
             e.Property(x => x.ProductId).HasColumnName("ProductId");
+        });
+
+        // StockReservation
+        modelBuilder.Entity<StockReservation>(e =>
+        {
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => new { r.VariantId, r.Status });
+            e.HasIndex(r => new { r.SessionKey, r.Status });
+            e.HasIndex(r => new { r.Status, r.ExpiresAt }); // for cleanup query
+            e.Property(r => r.Status).HasConversion<string>();
+            e.Ignore(r => r.CreatedBy);
+            e.Ignore(r => r.UpdatedBy);
+            e.Property(r => r.CreatedAt).HasColumnName("CreatedAt");
+            e.Property(r => r.UpdatedAt).HasColumnName("UpdatedAt");
         });
     }
 }

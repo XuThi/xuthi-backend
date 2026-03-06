@@ -15,6 +15,7 @@ public record UpdateCategoryResponse(
     string Name,
     string UrlSlug,
     string? Description,
+    string? ImageUrl,
     Guid? ParentCategoryId,
     int SortOrder
 );
@@ -34,6 +35,7 @@ public class UpdateCategoryEndpoint : ICarterModule
                 result.Name,
                 result.UrlSlug,
                 result.Description,
+                result.ImageUrl,
                 result.ParentCategoryId,
                 result.SortOrder);
             return Results.Ok(response);

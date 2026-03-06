@@ -7,6 +7,7 @@ public record CategoryResult(
     string Name,
     string UrlSlug,
     string? Description,
+    string? ImageUrl,
     Guid? ParentCategoryId,
     int SortOrder
 );
@@ -37,34 +38,23 @@ internal class UpdateCategoryHandler(ProductCatalogDbContext dbContext)
 
         return new CategoryResult(
             category.Id, category.Name, category.UrlSlug,
-            category.Description, category.ParentCategoryId, category.SortOrder
+            category.Description, category.ImageUrl, category.ParentCategoryId, category.SortOrder
         );
     }
 
-    private static string GenerateSlug(string value)
+    private static string GenerateSlug(string name)
     {
-        var lowered = value.Trim().ToLowerInvariant();
-        var sb = new System.Text.StringBuilder(lowered.Length);
-        var previousDash = false;
-
-        foreach (var ch in lowered.Normalize(System.Text.NormalizationForm.FormD))
+        var slug = name.Replace("đ", "d").Replace("Đ", "d")
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in slug)
         {
-            var unicodeCategory = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch);
-            if (unicodeCategory == System.Globalization.UnicodeCategory.NonSpacingMark)
-                continue;
-
-            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
-            {
-                sb.Append(ch);
-                previousDash = false;
-            }
-            else if (!previousDash)
-            {
-                sb.Append('-');
-                previousDash = true;
-            }
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
         }
-
-        return sb.ToString().Trim('-');
+        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        return slug;
     }
 }

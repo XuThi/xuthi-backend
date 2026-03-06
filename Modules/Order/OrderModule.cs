@@ -4,6 +4,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Order.Data;
+using Order.Orders.BackgroundServices;
+using Order.Orders.Services;
 
 namespace Order;
 
@@ -14,10 +16,17 @@ public static class OrderModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<OrderDbContext>(options =>
         {
-            options.UseNpgsql(builder.Configuration.GetConnectionString("appdata"));
+            options.UseSqlServer(builder.Configuration.GetConnectionString("appdata"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
-        builder.EnrichNpgsqlDbContext<OrderDbContext>();
+        builder.EnrichSqlServerDbContext<OrderDbContext>();
+
+        // Payment service (PayOS)
+        builder.Services.AddScoped<IPaymentService, PayOsPaymentService>();
+
+        // Background service: cancel expired PayOS payment orders
+        builder.Services.AddHostedService<ExpiredPaymentCleanupService>();
+
         return builder.Services;
     }
 

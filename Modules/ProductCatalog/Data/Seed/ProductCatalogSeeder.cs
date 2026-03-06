@@ -30,7 +30,6 @@ public static class ProductCatalogSeeder
             LogoUrl = "https://res.cloudinary.com/dxlhncwp0/image/upload/v1769941817/logo_qlelti.svg"
         };
         db.Brands.Add(brand);
-        
         // Seed category
         var category = new Category
         {
@@ -39,6 +38,8 @@ public static class ProductCatalogSeeder
             UrlSlug = "giay-cao-got",
             Description = "Các mẫu giày cao gót đẹp",
             ParentCategoryId = Guid.Empty,
+            ImageUrl = "https://res.cloudinary.com/dxlhncwp0/image/upload/v1772559328/highheel_category_kt5qdq.jpg",
+            ImagePublicId = "highheel_category_kt5qdq",
             SortOrder = 1
         };
         db.Categories.Add(category);
@@ -48,7 +49,7 @@ public static class ProductCatalogSeeder
         {
             Id = "size",
             Name = "Kích thước",
-            DisplayType = "dropdown",
+            DisplayType = "button",
             DefaultValue = "37",
             Values =
             [

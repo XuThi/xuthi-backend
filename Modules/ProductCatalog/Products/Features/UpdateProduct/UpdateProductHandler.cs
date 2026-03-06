@@ -1,4 +1,5 @@
 namespace ProductCatalog.Products.Features.UpdateProduct;
+using ProductCatalog.Products.Events;
 using ProductCatalog.Products.Features.Media;
 
 public record UpdateProductCommand(
@@ -14,6 +15,7 @@ public record UpdateProductRequest(
     Guid? CategoryId,
     Guid? BrandId,
     bool? IsActive,
+    bool NotifySubscribers = false,
     // Image IDs to remove
     List<Guid>? RemoveImageIds = null,
     // Reorder images: ImageId -> new SortOrder
@@ -351,6 +353,19 @@ internal class UpdateProductHandler(
             .Where(url => !string.IsNullOrWhiteSpace(url))
             .ToListAsync(cancellationToken);
 
+        // Notify subscribers if opted in
+        if (req.NotifySubscribers)
+        {
+            var firstImageUrl = imageUrls.Count > 0 ? imageUrls[0] : null;
+            var basePrice = await dbContext.Variants
+                .Where(v => v.ProductId == product.Id && v.IsActive)
+                .Select(v => (decimal?)v.Price)
+                .MinAsync(cancellationToken);
+            product.AddDomainEvent(new ProductCreatedEvent(
+                product.Id, product.Name, firstImageUrl, product.UrlSlug, basePrice));
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
         return new UpdateProductResult(
             product.Id,
             product.Name,
@@ -364,6 +379,19 @@ internal class UpdateProductHandler(
         );
     }
 
-    private static string GenerateSlug(string name) =>
-        name.ToLowerInvariant().Replace(" ", "-").Replace(".", "").Replace(",", "");
+    private static string GenerateSlug(string name)
+    {
+        var slug = name.Replace("đ", "d").Replace("Đ", "d")
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in slug)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
+        }
+        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        return slug;
+    }
 }

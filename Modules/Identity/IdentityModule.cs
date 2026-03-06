@@ -1,3 +1,5 @@
+using Identity.Users.Features.ChangePassword;
+using Identity.Users.Features.ForgotPassword;
 using Identity.Users.Features.GetCurrentUser;
 using Identity.Users.Features.Login;
 using Identity.Users.Features.LoginFacebook;
@@ -5,6 +7,7 @@ using Identity.Users.Features.LoginGoogle;
 using Identity.Users.Features.Logout;
 using Identity.Users.Features.OAuthCallback;
 using Identity.Users.Features.Register;
+using Identity.Users.Features.ResetPassword;
 using Identity.Users.Features.ResendVerification;
 using Identity.Users.Features.VerifyEmail;
 using Identity.Data;
@@ -27,10 +30,10 @@ public static class IdentityModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<IdentityDbContext>(options =>
         {
-            options.UseNpgsql(builder.Configuration.GetConnectionString("appdata"));
+            options.UseSqlServer(builder.Configuration.GetConnectionString("appdata"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
-        builder.EnrichNpgsqlDbContext<IdentityDbContext>();
+        builder.EnrichSqlServerDbContext<IdentityDbContext>();
         
         // Add Identity services
         builder.Services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
@@ -56,6 +59,8 @@ public static class IdentityModule
         builder.Services.AddScoped<IEmailService, EmailService>();
 
         // Add auth feature handlers used by endpoint parameter binding
+        builder.Services.AddScoped<ChangePasswordHandler>();
+        builder.Services.AddScoped<ForgotPasswordHandler>();
         builder.Services.AddScoped<GetCurrentUserHandler>();
         builder.Services.AddScoped<LoginHandler>();
         builder.Services.AddScoped<LoginGoogleHandler>();
@@ -63,6 +68,7 @@ public static class IdentityModule
         builder.Services.AddScoped<LogoutHandler>();
         builder.Services.AddScoped<OAuthCallbackHandler>();
         builder.Services.AddScoped<RegisterHandler>();
+        builder.Services.AddScoped<ResetPasswordHandler>();
         builder.Services.AddScoped<ResendVerificationHandler>();
         builder.Services.AddScoped<VerifyEmailHandler>();
         

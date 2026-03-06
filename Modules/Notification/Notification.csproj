@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
+    <ProjectReference Include="..\..\Shared\Core\Core.csproj" />
+    <ProjectReference Include="..\Order\Order.csproj" />
+    <ProjectReference Include="..\Identity\Identity.csproj" />
+    <ProjectReference Include="..\Customer\Customer.csproj" />
+    <ProjectReference Include="..\ProductCatalog\ProductCatalog.csproj" />
+    <ProjectReference Include="..\Promotion\Promotion.csproj" />
+  </ItemGroup>
+
+</Project>

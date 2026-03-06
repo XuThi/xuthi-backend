@@ -9,6 +9,7 @@ public record CreateSaleCampaignRequest(
     DateTime EndDate,
     bool IsActive = true,
     bool IsFeatured = false,
+    bool NotifySubscribers = false,
     List<CreateSaleCampaignItemRequest>? Items = null
 );
 

@@ -44,8 +44,21 @@ internal class UpdateSaleCampaignHandler(PromotionDbContext dbContext)
         );
     }
 
-    private static string GenerateSlug(string name) =>
-        name.ToLowerInvariant().Replace(" ", "-").Replace(".", "").Replace(",", "");
+    private static string GenerateSlug(string name)
+    {
+        var slug = name.Replace("đ", "d").Replace("Đ", "d")
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in slug)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
+        }
+        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        return slug;
+    }
 
     private async Task EnsureNoActiveOverlaps(SaleCampaign campaign, CancellationToken ct)
     {

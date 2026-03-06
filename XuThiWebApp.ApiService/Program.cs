@@ -18,6 +18,7 @@ using ProductCatalog;
 using ProductCatalog.Data;
 using Promotion;
 using Promotion.Data;
+using Notification;
 using Scalar.AspNetCore;
 using System.Text;
 using Identity.Users.Services;
@@ -38,9 +39,31 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.SetIsOriginAllowed(origin => 
-            origin.StartsWith("http://localhost:") || 
-            origin.StartsWith("https://localhost:"))
+        var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+            ?? [];
+
+        var isDevelopment = builder.Environment.IsDevelopment();
+
+        policy.SetIsOriginAllowed(origin =>
+        {
+            // Always allow explicitly configured origins
+            if (allowedOrigins.Any(allowed => origin.Equals(allowed, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            // In development, allow localhost and Vercel preview deploys
+            if (isDevelopment)
+            {
+                return origin.StartsWith("http://localhost:") ||
+            origin.StartsWith("https://localhost:") ||
+                       origin.EndsWith(".vercel.app");
+            }
+
+            // In production, also allow *.vercel.app for preview deployments
+            if (origin.EndsWith(".vercel.app"))
+                return true;
+
+            return false;
+        })
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -51,9 +74,9 @@ builder.Services.AddCors(options =>
 builder.AddIdentityModule();
 
 // Add JWT Authentication
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "YourSuperSecretKeyThatIsAtLeast32Characters!";
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "XuThiApi";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "XuThiFrontend";
+var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+var jwtAudience = builder.Configuration["Jwt:Audience"];
 
 var authBuilder = builder.Services.AddAuthentication(options =>
 {
@@ -117,7 +140,8 @@ builder.Services.AddMediatRWithAssemblies(
     typeof(PromotionModuleMarker).Assembly,
     typeof(CartModuleMarker).Assembly,
     typeof(CustomerModuleMarker).Assembly,
-    typeof(IdentityModule).Assembly
+    typeof(IdentityModule).Assembly,
+    typeof(NotificationModule).Assembly
 );
 
 // Add Carter for minimal API endpoints
@@ -127,7 +151,8 @@ builder.Services.AddCarterWithAssemblies(
     typeof(PromotionModuleMarker).Assembly,
     typeof(CartModuleMarker).Assembly,
     typeof(CustomerModuleMarker).Assembly,
-    typeof(IdentityModule).Assembly
+    typeof(IdentityModule).Assembly,
+    typeof(NotificationModule).Assembly
 );
 
 // Add modules (DbContext via Aspire - connection strings injected automatically)
@@ -136,11 +161,11 @@ builder.AddOrderModule();
 builder.AddPromotionModule();
 builder.AddCartModule();
 builder.AddCustomerModule();
+builder.AddNotificationModule();
 
 var app = builder.Build();
 
-// Auto-migrate database in development (Aspire ensures DB is ready via WaitFor)
-if (app.Environment.IsDevelopment())
+// Auto-migrate database (safe for single-instance deployment)
 {
     await using var scope = app.Services.CreateAsyncScope();
     await scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>().Database.MigrateAsync();
@@ -150,13 +175,14 @@ if (app.Environment.IsDevelopment())
     await scope.ServiceProvider.GetRequiredService<CustomerDbContext>().Database.MigrateAsync();
     await scope.ServiceProvider.GetRequiredService<IdentityDbContext>().Database.MigrateAsync();
     
-    // Seed initial product data
-    await ProductCatalogSeeder.SeedAsync(app.Services);
-    
-    // Seed roles and admin user
+    // Seed roles and admin user (idempotent - safe to run every startup)
     await IdentitySeeder.SeedRolesAndAdminAsync(app.Services);
+}
 
-    // Seed promotions/vouchers for testing
+// Seed sample data only in development
+if (app.Environment.IsDevelopment())
+{
+    await ProductCatalogSeeder.SeedAsync(app.Services);
     await PromotionSeeder.SeedAsync(app.Services);
 }
 
@@ -170,10 +196,10 @@ app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapOpenApi();
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
-    app.MapScalarApiReference();
+    app.MapScalarApiReference(options => options.WithTitle("XuThi API"));
 }
 
 // Map Carter endpoints from all modules

@@ -1,6 +1,10 @@
 using Core.DDD;
-using ProductCatalog.Products.Dtos;
 
 namespace ProductCatalog.Products.Events;
 
-public record ProductCreatedEvent(Guid ProductId) : IDomainEvent;
+public record ProductCreatedEvent(
+    Guid ProductId,
+    string ProductName,
+    string? ImageUrl,
+    string? Slug,
+    decimal? BasePrice) : IDomainEvent;

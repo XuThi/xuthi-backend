@@ -1,4 +1,4 @@
-using Npgsql;
+using Microsoft.Data.SqlClient;
 
 namespace Customer.Customers.Features.GetOrCreateCustomer;
 
@@ -33,8 +33,8 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
                 LoyaltyPoints = 0,
                 TotalSpent = 0,
                 TotalOrders = 0,
-                AcceptsMarketing = true,
-                AcceptsSms = true,
+                AcceptsMarketing = false,
+                AcceptsSms = false,
                 CreatedAt = now,
                 UpdatedAt = now,
                 LastLoginAt = now
@@ -87,12 +87,12 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
 
     private static bool IsExternalUserUniqueViolation(DbUpdateException ex)
     {
-        if (ex.GetBaseException() is not PostgresException pg)
+        // SQL Server error 2601 = unique index violation, 2627 = unique constraint violation
+        if (ex.GetBaseException() is not SqlException sqlEx)
         {
             return false;
         }
 
-        return pg.SqlState == PostgresErrorCodes.UniqueViolation
-            && string.Equals(pg.ConstraintName, "IX_Customers_ExternalUserId", StringComparison.OrdinalIgnoreCase);
+        return sqlEx.Number is 2601 or 2627;
     }
 }

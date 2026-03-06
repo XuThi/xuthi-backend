@@ -1,15 +1,17 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <UserSecretsId>20b0f5e7-2866-448c-83e7-074b10749215</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Modules\Cart\Cart.csproj" />
     <ProjectReference Include="..\Modules\Customer\Customer.csproj" />
     <ProjectReference Include="..\Modules\Identity\Identity.csproj" />
+    <ProjectReference Include="..\Modules\Notification\Notification.csproj" />
     <ProjectReference Include="..\Modules\Order\Order.csproj" />
     <ProjectReference Include="..\Modules\ProductCatalog\ProductCatalog.csproj" />
     <ProjectReference Include="..\Modules\Promotion\Promotion.csproj" />
@@ -21,12 +23,12 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="10.0.2" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.2" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.2" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0-rc.1.25451.107" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Scalar.AspNetCore" Version="1.2.60" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.12.46" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
   </ItemGroup>
 

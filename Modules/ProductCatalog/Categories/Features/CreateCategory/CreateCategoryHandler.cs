@@ -7,6 +7,7 @@ public record CategoryResult(
     string Name,
     string UrlSlug,
     string? Description,
+    string? ImageUrl,
     Guid ParentCategoryId,
     int SortOrder
 );
@@ -34,9 +35,22 @@ internal class CreateCategoryHandler(ProductCatalogDbContext dbContext)
         return MapToResult(category);
     }
 
-    private static string GenerateSlug(string name) =>
-        name.ToLowerInvariant().Replace(" ", "-").Replace(".", "").Replace(",", "");
+    private static string GenerateSlug(string name)
+    {
+        var slug = name.Replace("đ", "d").Replace("Đ", "d")
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in slug)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
+        }
+        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        return slug;
+    }
 
     private static CategoryResult MapToResult(Category c) =>
-        new(c.Id, c.Name, c.UrlSlug, c.Description, c.ParentCategoryId, c.SortOrder);
+        new(c.Id, c.Name, c.UrlSlug, c.Description, c.ImageUrl, c.ParentCategoryId, c.SortOrder);
 }

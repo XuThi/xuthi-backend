@@ -1,3 +1,5 @@
+using Promotion.SaleCampaigns.Events;
+
 namespace Promotion.SaleCampaigns.Features.CreateSaleCampaign;
 
 public record CreateSaleCampaignCommand(CreateSaleCampaignRequest Request) : ICommand<SaleCampaignResult>;
@@ -47,13 +49,35 @@ internal class CreateSaleCampaignHandler(PromotionDbContext dbContext)
         }
 
         dbContext.SaleCampaigns.Add(campaign);
+
+        // Raise domain event for subscriber notification (only if requested)
+        if (req.NotifySubscribers)
+        {
+            campaign.AddDomainEvent(new SaleCampaignCreatedEvent(
+                campaign.Id, campaign.Name, campaign.Slug, campaign.BannerImageUrl,
+                campaign.Type, campaign.StartDate, campaign.EndDate, campaign.Items.Count));
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return MapToResult(campaign);
     }
 
-    private static string GenerateSlug(string name) =>
-        name.ToLowerInvariant().Replace(" ", "-").Replace(".", "").Replace(",", "");
+    private static string GenerateSlug(string name)
+    {
+        var slug = name.Replace("đ", "d").Replace("Đ", "d")
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in slug)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
+        }
+        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
+        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        return slug;
+    }
 
     private static void EnsureNoLocalConflicts(List<CreateSaleCampaignItemRequest> items)
     {
