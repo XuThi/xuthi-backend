@@ -1,4 +1,5 @@
 using Customer.Data;
+using Core.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -14,7 +15,7 @@ public static class CustomerModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<CustomerDbContext>(options =>
         {
-            options.UseNpgsql(builder.Configuration.GetConnectionString("DatabaseConnection"));
+            options.UseNpgsql(builder.Configuration.GetPostgresConnectionString("DatabaseConnection"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         builder.EnrichNpgsqlDbContext<CustomerDbContext>();

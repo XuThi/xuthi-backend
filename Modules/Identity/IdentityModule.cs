@@ -12,6 +12,7 @@ using Identity.Users.Features.ResendVerification;
 using Identity.Users.Features.VerifyEmail;
 using Identity.Data;
 using Identity.Users.Models;
+using Core.Extensions;
 using Identity.Users.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Identity;
@@ -30,7 +31,7 @@ public static class IdentityModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<IdentityDbContext>(options =>
         {
-            options.UseNpgsql(builder.Configuration.GetConnectionString("DatabaseConnection"));
+            options.UseNpgsql(builder.Configuration.GetPostgresConnectionString("DatabaseConnection"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         builder.EnrichNpgsqlDbContext<IdentityDbContext>();
