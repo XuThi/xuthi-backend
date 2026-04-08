@@ -1,3 +1,5 @@
+using Mapster;
+// TODO: Check this out
 namespace Promotion.SaleCampaigns.Features.AddSaleCampaignItem;
 
 public record AddSaleCampaignItemRouteRequest(Guid CampaignId);
@@ -13,7 +15,7 @@ public class AddSaleCampaignItemEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new AddSaleCampaignItemCommand(route.CampaignId, request));
-            var response = new AddSaleCampaignItemResponse(result);
+            var response = result.Adapt<AddSaleCampaignItemResponse>();
             return Results.Created($"/api/sale-campaigns/{route.CampaignId}/items/{result.Id}", response);
         })
         .WithName("AddSaleCampaignItem")

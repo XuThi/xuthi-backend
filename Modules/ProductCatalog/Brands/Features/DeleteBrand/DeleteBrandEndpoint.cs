@@ -1,3 +1,6 @@
+// TODO: Check this out
+
+using Mapster;
 
 namespace ProductCatalog.Brands.Features.DeleteBrand;
 
@@ -12,7 +15,7 @@ public class DeleteBrandEndpoint : ICarterModule
             var command = new DeleteBrandCommand(id);
             var result = await sender.Send(command);
             var response = new DeleteBrandResponse(result);
-            return Results.Ok(response);
+            return result ? Results.Ok(response) : Results.NotFound();
         })
         .WithName("DeleteBrand")
         .Produces<DeleteBrandResponse>(StatusCodes.Status200OK)

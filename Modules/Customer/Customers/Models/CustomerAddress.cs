@@ -15,7 +15,6 @@ public class CustomerAddress : Entity<Guid>
     public string Phone { get; set; } = default!;
     public string Address { get; set; } = default!; // Street address
     public string Ward { get; set; } = default!;
-    public string District { get; set; } = default!;
     public string City { get; set; } = default!;
     public string? Note { get; set; } // Delivery instructions
     

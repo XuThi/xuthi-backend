@@ -21,8 +21,7 @@ public class CheckoutCommandValidator : AbstractValidator<CheckoutCommand>
         RuleFor(x => x.Request.CustomerPhone).NotEmpty().MaximumLength(20);
         RuleFor(x => x.Request.ShippingAddress).NotEmpty().MaximumLength(500);
         RuleFor(x => x.Request.ShippingCity).NotEmpty();
-        RuleFor(x => x.Request.ShippingDistrict).NotEmpty();
-        RuleFor(x => x.Request.ShippingWard).NotEmpty();
+        RuleFor(x => x.Request.ShippingWard);
         RuleFor(x => x.Request.Items).NotEmpty().WithMessage("Cart cannot be empty");
         RuleForEach(x => x.Request.Items).ChildRules(item =>
         {
@@ -177,7 +176,6 @@ internal class CheckoutHandler(
             CustomerPhone = req.CustomerPhone,
             ShippingAddress = req.ShippingAddress,
             ShippingCity = req.ShippingCity,
-            ShippingDistrict = req.ShippingDistrict,
             ShippingWard = req.ShippingWard,
             ShippingNote = req.ShippingNote,
             Subtotal = subtotal,
@@ -201,7 +199,6 @@ internal class CheckoutHandler(
             order.CustomerPhone,
             order.ShippingAddress,
             order.ShippingCity,
-            order.ShippingDistrict,
             order.ShippingWard,
             order.Subtotal,
             order.DiscountAmount,

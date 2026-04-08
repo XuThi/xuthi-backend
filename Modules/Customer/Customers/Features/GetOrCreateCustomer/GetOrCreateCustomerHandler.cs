@@ -1,5 +1,3 @@
-using Microsoft.Data.SqlClient;
-
 namespace Customer.Customers.Features.GetOrCreateCustomer;
 
 // TODO: Separate into GetCustomer and CreateCustomer if the logic becomes more complex. For now it's simple enough to combine since they share most of the code.
@@ -47,7 +45,7 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
                 await db.SaveChangesAsync(ct);
                 isNew = true;
             }
-            catch (DbUpdateException ex) when (IsExternalUserUniqueViolation(ex))
+            catch (DbUpdateException ex)
             {
                 db.Entry(customer).State = EntityState.Detached;
                 customer = await db.Customers.FirstAsync(c => c.ExternalUserId == query.ExternalUserId, ct);
@@ -84,15 +82,4 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
         c.Id, c.ExternalUserId, c.Email, c.FullName, c.Phone,
         c.Tier, c.LoyaltyPoints, c.TotalSpent, c.TotalOrders,
         c.TierDiscountPercentage, c.CreatedAt ?? DateTime.MinValue, c.LastOrderAt);
-
-    private static bool IsExternalUserUniqueViolation(DbUpdateException ex)
-    {
-        // SQL Server error 2601 = unique index violation, 2627 = unique constraint violation
-        if (ex.GetBaseException() is not SqlException sqlEx)
-        {
-            return false;
-        }
-
-        return sqlEx.Number is 2601 or 2627;
-    }
 }

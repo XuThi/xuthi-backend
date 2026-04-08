@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace Promotion.Vouchers.Features.GetVoucher;
 
 public record GetVoucherRequest(Guid Id);
@@ -13,7 +16,7 @@ public class GetVoucherEndpoint : ICarterModule
         {
             var query = new GetVoucherQuery(request.Id);
             var result = await sender.Send(query);
-            var response = new GetVoucherResponse(result.Voucher);
+            var response = result.Adapt<GetVoucherResponse>();
             return result.Voucher is null ? Results.NotFound() : Results.Ok(response);
         })
         .Produces<GetVoucherResponse>(StatusCodes.Status200OK)

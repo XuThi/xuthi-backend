@@ -60,7 +60,6 @@ public class CustomerDbContext : DbContext
             entity.Property(a => a.Phone).HasMaxLength(20).IsRequired();
             entity.Property(a => a.Address).HasMaxLength(500).IsRequired();
             entity.Property(a => a.Ward).HasMaxLength(100).IsRequired();
-            entity.Property(a => a.District).HasMaxLength(100).IsRequired();
             entity.Property(a => a.City).HasMaxLength(100).IsRequired();
             entity.Property(a => a.Note).HasMaxLength(500);
 

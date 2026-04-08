@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace Promotion.Vouchers.Features.DeleteVoucher;
 
 public record DeleteVoucherResponse(bool Success);
@@ -10,7 +13,7 @@ public class DeleteVoucherEndpoint : ICarterModule
         {
             var command = new DeleteVoucherCommand(id);
             var result = await sender.Send(command);
-            var response = new DeleteVoucherResponse(result.Success);
+            var response = result.Adapt<DeleteVoucherResponse>();
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })
         .Produces<DeleteVoucherResponse>(StatusCodes.Status200OK)

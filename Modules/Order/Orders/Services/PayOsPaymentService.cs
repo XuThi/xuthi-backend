@@ -48,7 +48,7 @@ public class PayOsPaymentService : IPaymentService
             BuyerName = order.CustomerName,
             BuyerEmail = order.CustomerEmail,
             BuyerPhone = order.CustomerPhone,
-            BuyerAddress = $"{order.ShippingAddress}, {order.ShippingWard}, {order.ShippingDistrict}, {order.ShippingCity}",
+            BuyerAddress = $"{order.ShippingAddress}, {order.ShippingWard}, {order.ShippingCity}",
             // PayOS description limit is 9 chars for non-linked accounts.
             // Keep it short, store orderCode→OrderId mapping via the webhook.
             Items = order.Items.Select(i => new PaymentLinkItem

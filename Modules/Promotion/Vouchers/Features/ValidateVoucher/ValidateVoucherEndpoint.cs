@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Promotion.Vouchers.Features.ValidateVoucher;
 
 public record ValidateVoucherRequest(
@@ -30,11 +32,7 @@ public class ValidateVoucherEndpoint : ICarterModule
             
             var result = await sender.Send(query);
             
-            var response = new ValidateVoucherResponse(
-                result.IsValid,
-                result.ErrorMessage,
-                result.VoucherId,
-                result.DiscountAmount);
+            var response = result.Adapt<ValidateVoucherResponse>();
             
             return Results.Ok(response);
         })

@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.Addresses.SetDefaultAddress;
 
 public record SetDefaultAddressRouteRequest(Guid CustomerId, Guid AddressId);
@@ -14,7 +16,7 @@ public class SetDefaultAddressEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new SetDefaultAddressCommand(route.CustomerId, route.AddressId));
-            var response = new SetDefaultAddressResponse(result.Success);
+            var response = result.Adapt<SetDefaultAddressResponse>();
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })
         .Produces<SetDefaultAddressResponse>(StatusCodes.Status200OK)

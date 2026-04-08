@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.Addresses.UpdateAddress;
 
 public record UpdateAddressRouteRequest(Guid CustomerId, Guid AddressId);
@@ -21,12 +23,11 @@ public class UpdateAddressEndpoint : ICarterModule
                 request.Phone,
                 request.Address,
                 request.Ward,
-                request.District,
                 request.City,
                 request.Note,
                 request.IsDefault));
 
-            var response = new UpdateAddressResponse(result.Success);
+            var response = result.Adapt<UpdateAddressResponse>();
 
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })

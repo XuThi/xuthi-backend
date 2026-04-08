@@ -1,3 +1,7 @@
+// TODO: Check this out
+
+using Mapster;
+
 namespace ProductCatalog.Categories.Features.CreateCategory;
 
 public record CreateCategoryRequest(
@@ -24,14 +28,7 @@ public class CreateCategoryEndpoint : ICarterModule
         app.MapPost("/api/categories", async (CreateCategoryRequest request, ISender sender) =>
         {
             var result = await sender.Send(new CreateCategoryCommand(request));
-            var response = new CreateCategoryResponse(
-                result.Id,
-                result.Name,
-                result.UrlSlug,
-                result.Description,
-                result.ImageUrl,
-                result.ParentCategoryId,
-                result.SortOrder);
+            var response = result.Adapt<CreateCategoryResponse>();
             return Results.Created($"/api/categories/{result.Id}", response);
         })
         .WithName("CreateCategory")

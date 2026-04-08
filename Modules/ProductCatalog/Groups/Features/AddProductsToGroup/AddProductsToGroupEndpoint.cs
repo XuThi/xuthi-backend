@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Groups.Features.AddProductsToGroup;
 
 public record AddProductsToGroupRequest(List<Guid> ProductIds);
@@ -14,7 +17,7 @@ public class AddProductsToGroupEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new AddProductsToGroupCommand(route.GroupId, request.ProductIds));
-            var response = new AddProductsToGroupResponse(result);
+            var response = result.Adapt<AddProductsToGroupResponse>();
             return Results.Ok(response);
         })
         .WithName("AddProductsToGroup")

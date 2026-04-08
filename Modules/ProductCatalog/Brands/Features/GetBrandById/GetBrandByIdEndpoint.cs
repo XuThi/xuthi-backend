@@ -1,3 +1,7 @@
+// TODO: Check this out
+
+using Mapster;
+
 namespace ProductCatalog.Brands.Features.GetBrandById;
 
 public record GetBrandByIdRequest(Guid Id);

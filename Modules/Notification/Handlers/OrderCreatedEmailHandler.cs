@@ -74,7 +74,7 @@ internal class OrderCreatedEmailHandler(
                                                 <strong>Mã đơn hàng:</strong> {{order.OrderNumber}}<br/>
                                                 <strong>Người nhận:</strong> {{order.CustomerName}}<br/>
                                                 <strong>SĐT:</strong> {{order.CustomerPhone}}<br/>
-                                                <strong>Địa chỉ:</strong> {{order.ShippingAddress}}, {{order.ShippingWard}}, {{order.ShippingDistrict}}, {{order.ShippingCity}}
+                                                <strong>Địa chỉ:</strong> {{order.ShippingAddress}}, {{order.ShippingWard}}, {{order.ShippingCity}}
                                             </td>
                                         </tr>
                                     </table>

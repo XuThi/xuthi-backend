@@ -1,6 +1,8 @@
 using Mapster;
 using Order.Orders.Features.GetOrder;
 
+// TODO: Check this out as well
+
 namespace Order.Orders.Features.GetOrderById;
 
 public record GetOrderByIdRequest(Guid Id);
@@ -16,7 +18,8 @@ public class GetOrderByIdEndpoint : ICarterModule
         {
             var query = new GetOrderQuery(Id: request.Id);
             var result = await sender.Send(query);
-            return Results.Ok(new GetOrderByIdResponse(result));
+            var response = new GetOrderByIdResponse(result);
+            return Results.Ok(response);
         })
         .WithName("GetOrderById")
         .Produces<GetOrderByIdResponse>(StatusCodes.Status200OK)

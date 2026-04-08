@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.SyncCartPrices;
 
 // Response
@@ -14,7 +16,7 @@ public class SyncCartPricesEndpoint : ICarterModule
 
             var result = await sender.Send(command);
 
-            var response = new SyncCartPricesResponse(result.Success, result.Cart, result.Warnings);
+            var response = result.Adapt<SyncCartPricesResponse>();
 
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })

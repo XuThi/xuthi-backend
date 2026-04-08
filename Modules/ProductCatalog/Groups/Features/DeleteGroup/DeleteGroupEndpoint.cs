@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Groups.Features.DeleteGroup;
 
 public record DeleteGroupRouteRequest(Guid Id);

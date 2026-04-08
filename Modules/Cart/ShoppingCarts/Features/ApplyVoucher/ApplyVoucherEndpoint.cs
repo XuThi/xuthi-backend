@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.ApplyVoucher;
 
 // Request and Response
@@ -18,11 +20,7 @@ public class ApplyVoucherEndpoint : ICarterModule
 
             var result = await sender.Send(command);
 
-            var response = new ApplyVoucherResponse(
-                result.Success,
-                result.ErrorMessage,
-                result.DiscountAmount,
-                result.Cart);
+            var response = result.Adapt<ApplyVoucherResponse>();
 
             return result.Success
                 ? Results.Ok(response)

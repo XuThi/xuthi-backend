@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace Promotion.Vouchers.Features.CreateVoucher;
 
 public record CreateVoucherResponse(Guid Id);
@@ -10,7 +13,7 @@ public class CreateVoucherEndpoint : ICarterModule
         {
             var command = new CreateVoucherCommand(request);
             var result = await sender.Send(command);
-            return Results.Created($"/api/vouchers/{result.Id}", new CreateVoucherResponse(result.Id));
+            return Results.Created($"/api/vouchers/{result.Id}", result.Adapt<CreateVoucherResponse>());
         })
         .Produces<CreateVoucherResponse>(StatusCodes.Status201Created)
         .ProducesProblem(StatusCodes.Status400BadRequest)

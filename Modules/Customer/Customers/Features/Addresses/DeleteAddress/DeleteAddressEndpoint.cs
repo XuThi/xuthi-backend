@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.Addresses.DeleteAddress;
 
 public record DeleteAddressRouteRequest(Guid CustomerId, Guid AddressId);
@@ -14,7 +16,7 @@ public class DeleteAddressEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new DeleteAddressCommand(route.AddressId));
-            var response = new DeleteAddressResponse(result.Success);
+            var response = result.Adapt<DeleteAddressResponse>();
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })
         .Produces<DeleteAddressResponse>(StatusCodes.Status200OK)

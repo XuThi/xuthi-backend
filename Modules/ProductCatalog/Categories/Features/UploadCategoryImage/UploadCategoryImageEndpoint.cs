@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using ProductCatalog.Products.Features.Media;
+// TODO: Check this out
+
+using Mapster;
 
 namespace ProductCatalog.Categories.Features.UploadCategoryImage;
 

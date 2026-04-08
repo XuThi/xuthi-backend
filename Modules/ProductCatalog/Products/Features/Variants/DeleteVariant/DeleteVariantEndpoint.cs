@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Products.Features.Variants.DeleteVariant;
 
 public record DeleteVariantRouteRequest(Guid VariantId);

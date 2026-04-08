@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.ClearCart;
 
 public record ClearCartRequest(Guid CartId);
@@ -17,7 +19,7 @@ public class ClearCartEndpoint : ICarterModule
 
             var result = await sender.Send(command);
 
-            var response = new ClearCartResponse(result.Success);
+            var response = result.Adapt<ClearCartResponse>();
 
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })

@@ -1,3 +1,5 @@
+using Mapster;
+// TODO: Check this out
 namespace Promotion.SaleCampaigns.Features.GetActiveSaleItems;
 
 public record GetActiveSaleItemsRequest(string? ProductIds, string? VariantIds);
@@ -14,7 +16,7 @@ public class GetActiveSaleItemsEndpoint : ICarterModule
             var productIds = ParseIds(request.ProductIds);
             var variantIds = ParseIds(request.VariantIds);
             var result = await sender.Send(new GetActiveSaleItemsQuery(productIds, variantIds));
-            return Results.Ok(new GetActiveSaleItemsResponse(result.Items));
+            return Results.Ok(result.Adapt<GetActiveSaleItemsResponse>());
         })
         .Produces<GetActiveSaleItemsResponse>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status400BadRequest)

@@ -10,7 +10,6 @@ public record OrderCreatedEvent(
     string CustomerPhone,
     string ShippingAddress,
     string ShippingCity,
-    string ShippingDistrict,
     string ShippingWard,
     decimal Subtotal,
     decimal DiscountAmount,

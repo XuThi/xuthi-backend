@@ -7,7 +7,6 @@ public record AddAddressRequest(
     string Phone,
     string Address,
     string Ward,
-    string District,
     string City,
     string? Note = null,
     bool SetAsDefault = false);
@@ -19,7 +18,6 @@ public record AddAddressCommand(
     string Phone,
     string Address,
     string Ward,
-    string District,
     string City,
     string? Note,
     bool SetAsDefault = false) : ICommand<AddAddressResult>;
@@ -68,7 +66,6 @@ internal class AddAddressHandler(CustomerDbContext db)
             Phone = cmd.Phone,
             Address = cmd.Address,
             Ward = cmd.Ward,
-            District = cmd.District,
             City = cmd.City,
             Note = cmd.Note,
             IsDefault = cmd.SetAsDefault || customer.Addresses.Count == 0

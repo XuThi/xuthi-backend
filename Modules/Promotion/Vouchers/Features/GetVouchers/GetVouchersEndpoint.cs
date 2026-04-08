@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace Promotion.Vouchers.Features.GetVouchers;
 
 public record GetVouchersRequest(bool? IsActive = null, bool? ValidOnly = null);
@@ -13,7 +16,7 @@ public class GetVouchersEndpoint : ICarterModule
         {
             var query = new GetVouchersQuery(request.IsActive, request.ValidOnly);
             var result = await sender.Send(query);
-            var response = new GetVouchersResponse(result.Vouchers);
+            var response = result.Adapt<GetVouchersResponse>();
             return Results.Ok(response);
         })
         .Produces<GetVouchersResponse>(StatusCodes.Status200OK)

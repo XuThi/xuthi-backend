@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Products.Features.DeleteProduct;
 
 public record DeleteProductResponse(bool Success);
@@ -11,7 +14,7 @@ public class DeleteProductEndpoint : ICarterModule
             var command = new DeleteProductCommand(id);
             var result = await sender.Send(command);
             var response = new DeleteProductResponse(result);
-            return Results.Ok(response);
+            return result ? Results.Ok(response) : Results.NotFound();
         })
         .WithName("DeleteProduct")
         .Produces<DeleteProductResponse>(StatusCodes.Status200OK)

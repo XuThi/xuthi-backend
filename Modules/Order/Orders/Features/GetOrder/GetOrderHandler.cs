@@ -14,7 +14,6 @@ public record OrderDetailResult(
     // Shipping
     string ShippingAddress,
     string ShippingCity,
-    string ShippingDistrict,
     string ShippingWard,
     string? ShippingNote,
     
@@ -91,7 +90,6 @@ internal class GetOrderHandler(OrderDbContext dbContext)
             order.CustomerPhone,
             order.ShippingAddress,
             order.ShippingCity,
-            order.ShippingDistrict,
             order.ShippingWard,
             order.ShippingNote,
             order.Subtotal,

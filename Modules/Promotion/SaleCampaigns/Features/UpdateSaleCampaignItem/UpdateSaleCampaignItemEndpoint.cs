@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace Promotion.SaleCampaigns.Features.UpdateSaleCampaignItem;
 
 public record UpdateSaleCampaignItemRouteRequest(Guid ItemId);
@@ -13,7 +16,7 @@ public class UpdateSaleCampaignItemEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new UpdateSaleCampaignItemCommand(route.ItemId, request));
-            var response = new UpdateSaleCampaignItemResponse(result);
+            var response = result.Adapt<UpdateSaleCampaignItemResponse>();
             return Results.Ok(response);
         })
         .WithName("UpdateSaleCampaignItem")

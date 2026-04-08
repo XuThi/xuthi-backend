@@ -18,10 +18,10 @@ public static class ProductCatalogModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<ProductCatalogDbContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("DatabaseConnection"));
+            options.UseNpgsql(builder.Configuration.GetConnectionString("DatabaseConnection"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
-        builder.EnrichSqlServerDbContext<ProductCatalogDbContext>();
+        builder.EnrichNpgsqlDbContext<ProductCatalogDbContext>();
         builder.Services.AddScoped<ICloudinaryMediaService, CloudinaryMediaService>();
         builder.Services.AddScoped<IStockReservationService, StockReservationService>();
         builder.Services.AddHostedService<StockReservationCleanupService>();

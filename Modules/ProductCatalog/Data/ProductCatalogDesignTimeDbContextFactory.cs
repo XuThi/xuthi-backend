@@ -8,7 +8,7 @@ public class ProductCatalogDesignTimeDbContextFactory : IDesignTimeDbContextFact
     public ProductCatalogDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<ProductCatalogDbContext>();
-        optionsBuilder.UseSqlServer("Server=localhost;Database=productcatalog;Trusted_Connection=True;TrustServerCertificate=True");
+        optionsBuilder.UseNpgsql("Host=localhost;Database=productcatalog;Username=postgres;Password=postgres");
 
         return new ProductCatalogDbContext(optionsBuilder.Options);
     }

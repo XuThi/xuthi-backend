@@ -13,7 +13,6 @@ public record CheckoutRequest(
     // Shipping
     string ShippingAddress,
     string ShippingCity,
-    string ShippingDistrict,
     string ShippingWard,
     string? ShippingNote,
 

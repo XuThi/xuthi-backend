@@ -1,3 +1,5 @@
+using Mapster;
+// TODO: Check this out
 namespace Promotion.SaleCampaigns.Features.UpdateSaleCampaign;
 
 public record UpdateSaleCampaignRequest(
@@ -29,10 +31,7 @@ public class UpdateSaleCampaignEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new UpdateSaleCampaignCommand(route.Id, request));
-            var response = new UpdateSaleCampaignResponse(
-                result.Id, result.Name, result.Slug, result.Description, result.BannerImageUrl,
-                result.Type, result.StartDate, result.EndDate, result.IsActive, result.IsFeatured,
-                result.IsRunning, result.IsUpcoming, result.ItemCount);
+            var response = result.Adapt<UpdateSaleCampaignResponse>();
             return Results.Ok(response);
         })
         .WithName("UpdateSaleCampaign")

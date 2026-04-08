@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.GetCustomer;
 
 public record GetCustomerRequest(Guid Id);
@@ -14,7 +16,7 @@ public class GetCustomerEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new GetCustomerQuery(request.Id));
-            var response = new GetCustomerResponse(result.Customer);
+            var response = result.Adapt<GetCustomerResponse>();
 
             return result.Customer is null ? Results.NotFound() : Results.Ok(response);
         })

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using ProductCatalog.Products.Features.Media;
-using Promotion.Data;
+// TODO: Check this out
+using Mapster;
 
 namespace Promotion.SaleCampaigns.Features.UploadSaleCampaignBanner;
 

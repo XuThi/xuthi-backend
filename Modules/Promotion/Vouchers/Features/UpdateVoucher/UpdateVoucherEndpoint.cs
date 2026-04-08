@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace Promotion.Vouchers.Features.UpdateVoucher;
 
 public record UpdateVoucherRouteRequest(Guid Id);
@@ -14,7 +17,7 @@ public class UpdateVoucherEndpoint : ICarterModule
         {
             var command = new UpdateVoucherCommand(route.Id, request);
             var result = await sender.Send(command);
-            var response = new UpdateVoucherResponse(result.Success);
+            var response = result.Adapt<UpdateVoucherResponse>();
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })
         .Produces<UpdateVoucherResponse>(StatusCodes.Status200OK)

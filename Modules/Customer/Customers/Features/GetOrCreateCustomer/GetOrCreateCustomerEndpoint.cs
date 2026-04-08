@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.GetOrCreateCustomer;
 
 // Request
@@ -16,7 +18,7 @@ public class GetOrCreateCustomerEndpoint : ICarterModule
                 request.ExternalUserId,
                 request.Email,
                 request.FullName));
-            var response = new SyncCustomerResponse(result.Customer, result.IsNew);
+            var response = result.Adapt<SyncCustomerResponse>();
             return Results.Ok(response);
         })
         .Produces<SyncCustomerResponse>(StatusCodes.Status200OK)

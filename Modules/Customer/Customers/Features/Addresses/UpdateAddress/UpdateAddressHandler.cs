@@ -7,7 +7,6 @@ public record UpdateAddressRequest(
     string Phone,
     string Address,
     string Ward,
-    string District,
     string City,
     string? Note,
     bool IsDefault);
@@ -19,7 +18,6 @@ public record UpdateAddressCommand(
     string Phone,
     string Address,
     string Ward,
-    string District,
     string City,
     string? Note,
     bool IsDefault) : ICommand<UpdateAddressResult>;
@@ -62,7 +60,6 @@ internal class UpdateAddressHandler(CustomerDbContext db)
         address.Phone = cmd.Phone;
         address.Address = cmd.Address;
         address.Ward = cmd.Ward;
-        address.District = cmd.District;
         address.City = cmd.City;
         address.Note = cmd.Note;
         address.IsDefault = cmd.IsDefault;

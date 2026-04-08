@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Products.Features.Variants.GetProductVariants;
 
 public record GetProductVariantsRequest(Guid ProductId);
@@ -12,7 +15,7 @@ public class GetProductVariantsEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new GetProductVariantsQuery(request.ProductId));
-            var response = new GetProductVariantsResponse(result);
+            var response = result.Adapt<GetProductVariantsResponse>();
             return Results.Ok(response);
         })
         .WithName("GetProductVariants")

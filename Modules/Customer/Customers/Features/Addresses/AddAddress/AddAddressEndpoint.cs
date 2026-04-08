@@ -1,5 +1,8 @@
+using Mapster;
+
 namespace Customer.Customers.Features.Addresses.AddAddress;
 
+// TODO: Wrong format here
 // Response
 public record AddAddressResponse(Guid AddressId);
 
@@ -21,11 +24,11 @@ public class AddAddressEndpoint : ICarterModule
                 request.Phone,
                 request.Address,
                 request.Ward,
-                request.District,
                 request.City,
                 request.Note,
                 request.SetAsDefault));
-            return Results.Created($"/api/customers/{customerId}/addresses/{result.AddressId}", new AddAddressResponse(result.AddressId));
+            var response = result.Adapt<AddAddressResponse>();
+            return Results.Created($"/api/customers/{customerId}/addresses/{result.AddressId}", response);
         })
         .Produces<AddAddressResponse>(StatusCodes.Status201Created)
         .ProducesProblem(StatusCodes.Status400BadRequest)

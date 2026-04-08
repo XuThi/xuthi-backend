@@ -30,10 +30,10 @@ public static class IdentityModule
         // Add DbContext (non-pooled) so scoped DispatchDomainEventsInterceptor can be resolved
         builder.Services.AddDbContext<IdentityDbContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("DatabaseConnection"));
+            options.UseNpgsql(builder.Configuration.GetConnectionString("DatabaseConnection"));
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
-        builder.EnrichSqlServerDbContext<IdentityDbContext>();
+        builder.EnrichNpgsqlDbContext<IdentityDbContext>();
         
         // Add Identity services
         builder.Services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>

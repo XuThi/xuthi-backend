@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Groups.Features.GetGroups;
 
 public record GetGroupsRequest(int Page = 1, int PageSize = 20);
@@ -12,7 +15,7 @@ public class GetGroupsEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new GetGroupsQuery(request.Page, request.PageSize));
-            var response = new GetGroupsResponse(result);
+            var response = result.Adapt<GetGroupsResponse>();
             return Results.Ok(response);
         })
         .WithName("GetGroups")

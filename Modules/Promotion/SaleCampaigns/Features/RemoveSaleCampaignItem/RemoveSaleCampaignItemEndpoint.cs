@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Promotion.SaleCampaigns.Features.RemoveSaleCampaignItem;
 
 public record RemoveSaleCampaignItemRouteRequest(Guid ItemId);

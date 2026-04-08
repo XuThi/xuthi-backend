@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,10 +17,10 @@ public static class ProductCatalogSeeder
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>();
-        
+
         // Only seed if database is empty
         if (await db.Brands.AnyAsync()) return;
-        
+
         // Seed brand
         var brand = new Brand
         {
@@ -43,7 +44,7 @@ public static class ProductCatalogSeeder
             SortOrder = 1
         };
         db.Categories.Add(category);
-        
+
         // Seed VariantOption: Size
         var sizeOption = new VariantOption
         {
@@ -61,7 +62,7 @@ public static class ProductCatalogSeeder
             ]
         };
         db.VariantOptions.Add(sizeOption);
-        
+
         // Seed VariantOption: Color
         var colorOption = new VariantOption
         {
@@ -80,11 +81,11 @@ public static class ProductCatalogSeeder
         };
         db.VariantOptions.Add(colorOption);
 
-        
+
         // Product seed data from TypeScript
         var products = GetProductSeedData();
         var random = new Random(20260219);
-        
+
         foreach (var (productData, index) in products.Select((p, i) => (p, i)))
         {
             var productId = Guid.NewGuid();
@@ -99,9 +100,9 @@ public static class ProductCatalogSeeder
                 IsActive = true,
                 IsDeleted = false,
                 CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                UpdatedAt = DateTime.UtcNow,
             };
-            
+
             // Add ProductVariantOption link (this product uses Size option)
             product.VariantOptions.Add(new ProductVariantOption
             {
@@ -120,7 +121,7 @@ public static class ProductCatalogSeeder
                     SortOrder = 2
                 });
             }
-            
+
             // Add images
             var sortOrder = 0;
             foreach (var imageUrl in productData.ImageUrls)
@@ -130,11 +131,11 @@ public static class ProductCatalogSeeder
                 {
                     Id = imageId,
                     Url = imageUrl,
-                    CloudinaryPublicId = null, // Firebase URL, not Cloudinary
+                    CloudinaryPublicId = ExtractCloudinaryPublicId(imageUrl),
                     AltText = productData.Name
                 };
                 db.Images.Add(image);
-                
+
                 product.Images.Add(new ProductImage
                 {
                     Id = Guid.NewGuid(),
@@ -144,7 +145,7 @@ public static class ProductCatalogSeeder
                     SortOrder = sortOrder++
                 });
             }
-            
+
             // Create one variant per size
             var sizes = new[] { "34", "35", "36", "37", "38" };
             var colors = useColorOption ? new[] { "Đen", "Trắng", "Đỏ" } : new[] { string.Empty };
@@ -200,26 +201,26 @@ public static class ProductCatalogSeeder
                     });
                 }
             }
-            
+
             db.Products.Add(product);
         }
-        
+
         await db.SaveChangesAsync();
     }
-    
+
     private static string GenerateSlug(string name)
     {
         var slug = name.Replace("đ", "d").Replace("Đ", "d")
-            .Normalize(System.Text.NormalizationForm.FormD);
-        var sb = new System.Text.StringBuilder();
+            .Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder();
         foreach (var c in slug)
         {
-            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
-                != System.Globalization.UnicodeCategory.NonSpacingMark)
+            if (CharUnicodeInfo.GetUnicodeCategory(c)
+                != UnicodeCategory.NonSpacingMark)
                 sb.Append(c);
         }
-        slug = sb.ToString().Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
-        slug = System.Text.RegularExpressions.Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
+        slug = sb.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();
+        slug = Regex.Replace(slug, @"[^a-z0-9]+", "-").Trim('-');
         return slug;
     }
 
@@ -244,74 +245,90 @@ public static class ProductCatalogSeeder
             .ToString()
             .Trim('-');
     }
-    
+
+    private static string? ExtractCloudinaryPublicId(string imageUrl)
+    {
+        if (!Uri.TryCreate(imageUrl, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        if (!uri.Host.Contains("res.cloudinary.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var fileName = Path.GetFileNameWithoutExtension(uri.AbsolutePath);
+        return string.IsNullOrWhiteSpace(fileName) ? null : fileName;
+    }
+
     private static List<ProductSeedData> GetProductSeedData() =>
     [
         new("Giày cao gót nữ màu bạc quai đính đá", "Giày cao gót sang trọng với quai đính đá lấp lánh", "GG1", 680000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-1.jpg?alt=media&token=b38fd3b2-edf3-4277-87d8-7b4b0fb62f56",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-12.jpg?alt=media&token=e96193e5-e7d9-4a1a-ba70-f50849b4f165"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888633/Juva-1_jjvkgj.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888658/Juva-12_zmbgss.jpg"
         ]),
-        new("Giày cao gót tiểu thư", "Giày cao gót phong cách tiểu thư thanh lịch", "GN1", 610000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-2.jpg?alt=media&token=9d2eec14-b2be-43c0-b50a-712e46693902",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-15.jpg?alt=media&token=1e110646-6fd2-4634-ac0a-276b96374fb9"
+        new ("Giày cao gót tiểu thư", "Giày cao gót phong cách tiểu thư thanh lịch", "GN1", 610000, [
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888635/Juva-2_i8nnst.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888663/Juva-15_zbsgta.jpg"
         ]),
         new("Giày cao gót đen dây chéo phối dây đá", "Giày cao gót đen thiết kế dây chéo độc đáo", "GW4", 650000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-3.jpg?alt=media&token=5afa247e-412a-4695-8be4-14d462d95b7e",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-16.jpg?alt=media&token=a9b6fb01-ad89-4dc2-b1ac-d01aafb83db5"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888648/Juva-3_yv5oyf.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888663/Juva-16_ppuf0y.jpg"
         ]),
         new("Giày cao gót quai sang chảnh", "Giày cao gót với quai thiết kế sang chảnh", "GB1", 610000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-4.jpg?alt=media&token=1684294e-fe27-4afd-9a82-c5c03ca97902",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-14.jpg?alt=media&token=0b1f8c15-a3c9-4b57-ab73-33d998534544"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888648/Juva-4_gdeg3o.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888662/Juva-14_euhtil.jpg"
         ]),
         new("Giày cao gót nude đế trong", "Giày cao gót màu nude với đế trong suốt hiện đại", "GN2", 610000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-5.jpg?alt=media&token=9009ba11-c080-4211-b8b8-bc1a1ce8b00a",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-13.jpg?alt=media&token=c9dd9dda-fe41-4ca9-a3bf-0bc708ec2201"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888649/Juva-5_za9sni.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888658/Juva-13_bjx1kw.jpg"
         ]),
         new("Giày cao gót đen quai đính đá", "Giày cao gót đen sang trọng với quai đính đá", "GB4", 670000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-6.jpg?alt=media&token=9a16c8db-4f5e-474f-9ad2-95f336863834",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-11.jpg?alt=media&token=7e585b8b-feb7-4e23-abe9-8e34aa46b531"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888649/Juva-6_npync6.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888657/Juva-11_ljvzrb.jpg"
         ]),
         new("Guốc đen sang chảnh đá 7 màu", "Guốc đen thiết kế sang chảnh với đá 7 màu lấp lánh", "GB3", 690000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-7.jpg?alt=media&token=f78cd442-b180-4dba-ab28-a932782eb12f",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-17.jpg?alt=media&token=d3d79ab1-dfbc-407b-97d6-ed680b47161a"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888649/Juva-7_mqbtj9.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888664/Juva-17_aqf68s.jpg"
         ]),
         new("Giày cao gót đen quai đính đá", "Giày cao gót đen với quai đính đá tinh tế", "GB2", 650000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-8.jpg?alt=media&token=755a64ef-393a-4b16-881b-fdf9693aaa5b",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-18.jpg?alt=media&token=aec88c3c-728f-4f17-814a-abaeb8e19ca2"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888649/Juva-8_odn5m2.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888665/Juva-18_ufyhdf.jpg"
         ]),
         new("Giày cao gót trắng quai chéo dây phối dây đá", "Giày cao gót trắng với thiết kế quai chéo phối đá", "GW2", 630000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-9.jpg?alt=media&token=db090e4b-be9b-4be4-9190-c11592efdaa6",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-20.jpg?alt=media&token=d41bf132-c52c-43aa-ad91-14c2ff6b9546"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888655/Juva-9_j0xswq.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888666/Juva-20_fptylh.jpg"
         ]),
         new("Giày cao gót trắng quai chéo đính đá", "Giày cao gót trắng thanh lịch với quai chéo đính đá", "GW1", 630000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-10.jpg?alt=media&token=14e0e923-e540-4094-8b80-8080e5e68069",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-19.jpg?alt=media&token=93eb3237-209e-4a79-9693-381686d1bd13"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888657/Juva-10_bgxkre.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888665/Juva-19_fcwfjh.jpg"
         ]),
         new("Giày cao gót bạc tiểu thư", "Giày cao gót bạc phong cách tiểu thư", "SP1", 580000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-21.jpg?alt=media&token=1d63cf9b-c45c-4acf-84dd-855de3206046",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-22.jpg?alt=media&token=668a60fe-e472-4836-aa4a-25dc85830ba2"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888669/Juva-21_hhbgis.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888669/Juva-22_wexziv.jpg"
         ]),
         new("Giày cao gót vàng đồng quai tỏng", "Giày cao gót vàng đồng thiết kế độc đáo", "SP2", 550000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-23.jpg?alt=media&token=7e64206e-5daa-4d96-b9ca-d9227d6662ff",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-24.jpg?alt=media&token=ec29331b-edb9-4f9e-a36d-e7a410f13b12"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888675/Juva-23_s9lxwf.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888676/Juva-24_kg3zvo.jpg"
         ]),
         new("Giày cao gót đính đá", "Giày cao gót đính đá lấp lánh", "SP3", 630000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-25.jpg?alt=media&token=641a10a8-9abc-42f1-9e56-e9850e8b6d5a",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-26.jpg?alt=media&token=405296c3-4b5b-4d46-a5ac-048c8ef38610"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888676/Juva-25_tzyu7a.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888676/Juva-26_f4oqof.jpg"
         ]),
         new("Giày cao quai trong (đen)", "Giày cao gót đen với quai trong suốt", "SP4", 550000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-27.jpg?alt=media&token=9d7baa12-1aeb-45da-be07-40b6fbf0cbfb",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-28.jpg?alt=media&token=91f48019-28eb-4f8f-9370-67f71705a6e7"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888676/Juva-27_kktwm7.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888676/Juva-28_jxa9pp.jpg"
         ]),
         new("Dép xỏ ngón", "Dép xỏ ngón thời trang", "SP5", 180000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-31.jpg?alt=media&token=9c5e0114-deb3-4a23-96a0-1f6cef0c1cb2",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-32.jpg?alt=media&token=75a3cbe8-c2ed-4006-b1ce-f2ec44802ad7",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-33.jpg?alt=media&token=99c43e81-4e51-4e8c-a610-1d71d6d666fa",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-34.jpg?alt=media&token=6dab17f7-3fc0-4172-9be4-8959db8e3e7f"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888631/Juva-31_boahb5.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888631/Juva-32_stqsps.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888632/Juva-33_zy8yyj.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888631/Juva-34_xnu5gs.jpg"
         ]),
         new("Giày cao quai nhung", "Giày cao gót với quai nhung sang trọng", "SP6", 580000, [
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-29.jpg?alt=media&token=184e6f0c-a6a0-44e6-a8a5-b054ecb2cd59",
-            "https://firebasestorage.googleapis.com/v0/b/xuthi-6f838.appspot.com/o/Juva-30.jpg?alt=media&token=59093e40-9d9b-42f4-8167-a3573082038e"
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888632/Juva-29_txwiiq.jpg",
+            "https://res.cloudinary.com/dxlhncwp0/image/upload/v1774888631/Juva-30_mjqwxv.jpg"
         ])
     ];
     

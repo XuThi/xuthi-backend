@@ -43,7 +43,6 @@ public record CustomerAddressDto(
     string Phone,
     string Address,
     string Ward,
-    string District,
     string City,
     string? Note,
     bool IsDefault);

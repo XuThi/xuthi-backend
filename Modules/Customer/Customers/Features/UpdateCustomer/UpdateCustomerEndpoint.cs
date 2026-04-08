@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.UpdateCustomer;
 
 public record UpdateCustomerRouteRequest(Guid Id);
@@ -23,7 +25,7 @@ public class UpdateCustomerEndpoint : ICarterModule
                 request.AcceptsMarketing,
                 request.AcceptsSms));
 
-            var response = new UpdateCustomerResponse(result.Success);
+            var response = result.Adapt<UpdateCustomerResponse>();
 
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })

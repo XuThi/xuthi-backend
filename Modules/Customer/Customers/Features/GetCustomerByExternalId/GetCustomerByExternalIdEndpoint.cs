@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Customer.Customers.Features.GetCustomerByExternalId;
 
 public record GetCustomerByExternalIdRequest(string ExternalId);
@@ -14,7 +16,7 @@ public class GetCustomerByExternalIdEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new GetCustomerByExternalIdQuery(request.ExternalId));
-            var response = new GetCustomerByExternalIdResponse(result.Customer);
+            var response = result.Adapt<GetCustomerByExternalIdResponse>();
             return result.Customer is null ? Results.NotFound() : Results.Ok(response);
         })
         .Produces<GetCustomerByExternalIdResponse>(StatusCodes.Status200OK)

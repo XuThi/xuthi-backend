@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Groups.Features.GetGroupByName;
 
 public record GetGroupByNameRequest(string Name);
@@ -12,7 +15,7 @@ public class GetGroupByNameEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new GetGroupByNameQuery(request.Name));
-            var response = new GetGroupByNameResponse(result);
+            var response = result.Adapt<GetGroupByNameResponse>();
             return Results.Ok(response);
         })
         .WithName("GetGroupByName")

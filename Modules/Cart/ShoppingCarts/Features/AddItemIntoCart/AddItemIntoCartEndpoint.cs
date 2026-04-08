@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.AddItemIntoCart;
 
 // Request and Response
@@ -11,16 +13,11 @@ public class AddToCartEndpoint : ICarterModule
     {
         app.MapPost("/api/cart/items", async (AddToCartRequest request, ISender sender) =>
         {
-            var command = new AddToCartCommand(
-                request.SessionId,
-                request.CustomerId,
-                request.ProductId,
-                request.VariantId,
-                request.Quantity);
+            var command = request.Adapt<AddToCartCommand>();
 
             var result = await sender.Send(command);
 
-            var response = new AddToCartResponse(result.CartId, result.Cart);
+            var response = result.Adapt<AddToCartResponse>();
 
             return Results.Ok(response);
         })

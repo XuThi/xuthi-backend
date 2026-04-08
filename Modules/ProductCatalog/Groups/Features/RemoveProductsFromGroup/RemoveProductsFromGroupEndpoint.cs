@@ -1,3 +1,6 @@
+using Mapster;
+// TODO: Check this out
+
 namespace ProductCatalog.Groups.Features.RemoveProductsFromGroup;
 
 public record RemoveProductsFromGroupRequest(List<Guid> ProductIds);
@@ -14,7 +17,7 @@ public class RemoveProductsFromGroupEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new RemoveProductsFromGroupCommand(route.GroupId, request.ProductIds));
-            var response = new RemoveProductsFromGroupResponse(result);
+            var response = result.Adapt<RemoveProductsFromGroupResponse>();
             return Results.Ok(response);
         })
         .WithName("RemoveProductsFromGroup")

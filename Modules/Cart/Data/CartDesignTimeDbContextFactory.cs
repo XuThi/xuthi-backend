@@ -8,7 +8,7 @@ public class CartDesignTimeDbContextFactory : IDesignTimeDbContextFactory<CartDb
     public CartDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<CartDbContext>();
-        optionsBuilder.UseSqlServer("Server=localhost;Database=cart;Trusted_Connection=True;TrustServerCertificate=True");
+        optionsBuilder.UseNpgsql("Host=localhost;Database=cart;Username=postgres;Password=postgres");
 
         return new CartDbContext(optionsBuilder.Options);
     }

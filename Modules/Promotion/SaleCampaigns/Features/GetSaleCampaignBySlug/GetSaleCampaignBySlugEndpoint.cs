@@ -1,3 +1,5 @@
+using Mapster;
+// TODO: Check this out
 namespace Promotion.SaleCampaigns.Features.GetSaleCampaignBySlug;
 
 public record GetSaleCampaignBySlugRequest(string Slug);

@@ -1,3 +1,5 @@
+using Mapster;
+// TODO: Check this out
 namespace Promotion.SaleCampaigns.Features.GetSaleCampaigns;
 
 public record GetSaleCampaignsRequest(

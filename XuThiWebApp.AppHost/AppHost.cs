@@ -1,7 +1,7 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-var sql = builder.AddSqlServer("sql");
-var sqldb = sql.AddDatabase("appdata");
+var sql = builder.AddPostgres("sql");
+var sqldb = sql.AddDatabase("DatabaseConnection");
 
 var apiService = builder.AddProject<Projects.XuThiWebApp_ApiService>("apiservice")
     .WithReference(sqldb)

@@ -8,7 +8,7 @@ public class CustomerDesignTimeDbContextFactory : IDesignTimeDbContextFactory<Cu
     public CustomerDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<CustomerDbContext>();
-        optionsBuilder.UseSqlServer("Server=localhost;Database=customer;Trusted_Connection=True;TrustServerCertificate=True");
+        optionsBuilder.UseNpgsql("Host=localhost;Database=customer;Username=postgres;Password=postgres");
 
         return new CustomerDbContext(optionsBuilder.Options);
     }

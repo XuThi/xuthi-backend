@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.MergeCarts;
 
 public record MergeCartsRequest(string SessionId, Guid CustomerId);
@@ -13,7 +15,7 @@ public class MergeCartsEndpoint : ICarterModule
 
             var result = await sender.Send(command);
 
-            var response = new MergeCartsResponse(result.Success, result.Cart);
+            var response = result.Adapt<MergeCartsResponse>();
 
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })

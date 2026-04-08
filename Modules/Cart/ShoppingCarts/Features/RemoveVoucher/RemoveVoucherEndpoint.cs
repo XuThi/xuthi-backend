@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.RemoveVoucher;
 
 // Response
@@ -14,7 +16,7 @@ public class RemoveVoucherEndpoint : ICarterModule
 
             var result = await sender.Send(command);
 
-            var response = new RemoveVoucherResponse(result.Success, result.Cart);
+            var response = result.Adapt<RemoveVoucherResponse>();
 
             return result.Success ? Results.Ok(response) : Results.NotFound();
         })

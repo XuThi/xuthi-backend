@@ -26,6 +26,6 @@ internal class GetCustomerHandler(CustomerDbContext db)
         c.CreatedAt, c.LastLoginAt, c.LastOrderAt,
         c.Addresses.Select(a => new CustomerAddressDto(
             a.Id, a.Label, a.RecipientName, a.Phone, a.Address,
-            a.Ward, a.District, a.City, a.Note, a.IsDefault
+            a.Ward, a.City, a.Note, a.IsDefault
         )).ToList());
 }

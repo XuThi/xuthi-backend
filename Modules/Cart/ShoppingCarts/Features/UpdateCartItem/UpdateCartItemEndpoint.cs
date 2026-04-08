@@ -1,3 +1,5 @@
+using Mapster;
+
 namespace Cart.ShoppingCarts.Features.UpdateCartItem;
 
 // Request and Response
@@ -19,7 +21,7 @@ public class UpdateCartItemEndpoint : ICarterModule
 
             var result = await sender.Send(command);
 
-            var response = new UpdateCartItemResponse(result.Success, result.Cart, result.ErrorMessage);
+            var response = result.Adapt<UpdateCartItemResponse>();
 
             return result.Success
                 ? Results.Ok(response)

@@ -1,3 +1,7 @@
+// TODO: Check this out
+
+using Mapster;
+
 namespace ProductCatalog.Categories.Features.UpdateCategory;
 
 public record UpdateCategoryRequest(
@@ -30,14 +34,7 @@ public class UpdateCategoryEndpoint : ICarterModule
             ISender sender) =>
         {
             var result = await sender.Send(new UpdateCategoryCommand(route.Id, request));
-            var response = new UpdateCategoryResponse(
-                result.Id,
-                result.Name,
-                result.UrlSlug,
-                result.Description,
-                result.ImageUrl,
-                result.ParentCategoryId,
-                result.SortOrder);
+            var response = result.Adapt<UpdateCategoryResponse>();
             return Results.Ok(response);
         })
         .WithName("UpdateCategory")

@@ -17,7 +17,6 @@ public class CustomerOrder : Aggregate<Guid>
     // Shipping address
     public string ShippingAddress { get; set; } = default!;
     public string ShippingCity { get; set; } = default!;
-    public string ShippingDistrict { get; set; } = default!;
     public string ShippingWard { get; set; } = default!;
     public string? ShippingNote { get; set; } // Delivery instructions
     

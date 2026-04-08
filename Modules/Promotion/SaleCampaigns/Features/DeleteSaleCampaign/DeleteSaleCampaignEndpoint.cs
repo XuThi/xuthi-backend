@@ -1,3 +1,5 @@
+using Mapster;
+// TODO: Check this out
 namespace Promotion.SaleCampaigns.Features.DeleteSaleCampaign;
 
 public record DeleteSaleCampaignRouteRequest(Guid Id);

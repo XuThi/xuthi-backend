@@ -2,6 +2,8 @@
   <Folder Name="/Modules/">
     <Project Path="Modules/Cart/Cart.csproj" />
     <Project Path="Modules/Customer/Customer.csproj" />
+    <Project Path="Modules/Identity/Identity.csproj" />
+    <Project Path="Modules/Notification/Notification.csproj" />
     <Project Path="Modules/Order/Order.csproj" Id="bb979ecd-d392-4ed3-a0e9-d786a4c71dfb" />
     <Project Path="Modules/ProductCatalog/ProductCatalog.csproj" Id="e49d5abc-f93a-4ec0-9c82-78684c54007a" />
     <Project Path="Modules/Promotion/Promotion.csproj" />
@@ -14,5 +16,4 @@
   <Project Path="XuThiWebApp.ApiService/XuThiWebApp.ApiService.csproj" />
   <Project Path="XuThiWebApp.AppHost/XuThiWebApp.AppHost.csproj" />
   <Project Path="XuThiWebApp.ServiceDefaults/XuThiWebApp.ServiceDefaults.csproj" />
-  <Project Path="XuThiWebApp.Web/XuThiWebApp.Web.csproj" />
 </Solution>
