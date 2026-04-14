@@ -1,3 +1,4 @@
+using Core.Caching;
 namespace ProductCatalog.Categories.Features.CreateCategory;
 
 public record CreateCategoryCommand(CreateCategoryRequest Request) : ICommand<CategoryResult>;
@@ -12,7 +13,7 @@ public record CategoryResult(
     int SortOrder
 );
 
-internal class CreateCategoryHandler(ProductCatalogDbContext dbContext)
+internal class CreateCategoryHandler(ProductCatalogDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<CreateCategoryCommand, CategoryResult>
 {
     public async Task<CategoryResult> Handle(CreateCategoryCommand command, CancellationToken cancellationToken)
@@ -31,6 +32,7 @@ internal class CreateCategoryHandler(ProductCatalogDbContext dbContext)
 
         dbContext.Categories.Add(category);
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.Categories);
 
         return MapToResult(category);
     }

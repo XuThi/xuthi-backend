@@ -1,6 +1,7 @@
 using Cart;
 using Cart.Data;
 using Carter;
+using Core.Caching;
 using Core.Exceptions.Handler;
 using Core.Extensions;
 using Customer;
@@ -33,6 +34,10 @@ builder.AddServiceDefaults();
 // Add services to the container.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<CustomExceptionHandler>();
+
+// Add in-memory cache for read-heavy endpoints (products, categories, brands, campaigns)
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<ICacheInvalidator, MemoryCacheInvalidator>();
 
 // Add CORS for frontend
 builder.Services.AddCors(options =>
@@ -199,6 +204,13 @@ if (app.Environment.IsDevelopment())
 
 // Map Carter endpoints from all modules
 app.MapCarter();
+
+// Lightweight health check (no database, no auth) — for UptimeRobot pings
+app.MapGet("/api/health", () => Results.Ok(new { status = "ok", timestamp = DateTime.UtcNow }))
+    .WithName("HealthCheck")
+    .WithTags("Health")
+    .WithSummary("Lightweight health check — no database calls")
+    .ExcludeFromDescription();
 
 app.MapDefaultEndpoints();
 

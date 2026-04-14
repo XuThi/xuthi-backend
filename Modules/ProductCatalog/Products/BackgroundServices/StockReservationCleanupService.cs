@@ -13,6 +13,7 @@ public class StockReservationCleanupService(
     IServiceScopeFactory scopeFactory,
     ILogger<StockReservationCleanupService> logger) : BackgroundService
 {
+    public static bool RequireCheck = true; // True by default so it checks on startup
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -21,6 +22,12 @@ public class StockReservationCleanupService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!RequireCheck)
+            {
+                await Task.Delay(Interval, stoppingToken);
+                continue;
+            }
+
             try
             {
                 await using var scope = scopeFactory.CreateAsyncScope();
@@ -30,6 +37,17 @@ public class StockReservationCleanupService(
                 if (released > 0)
                 {
                     logger.LogInformation("Released {Count} expired stock reservations", released);
+                }
+
+                // Check if there are any remaining active reservations logic directly via dbContext
+                var db = scope.ServiceProvider.GetRequiredService<ProductCatalog.Data.ProductCatalogDbContext>();
+                var hasActive = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(
+                    db.StockReservations, r => r.Status == ProductCatalog.Products.Models.StockReservationStatus.Reserved, stoppingToken);
+                
+                if (!hasActive)
+                {
+                    RequireCheck = false;
+                    logger.LogInformation("No active reservations remaining. Stock reservation cronjob paused until new reservation.");
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

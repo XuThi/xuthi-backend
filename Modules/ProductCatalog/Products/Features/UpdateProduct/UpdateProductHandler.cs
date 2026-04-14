@@ -1,3 +1,4 @@
+using Core.Caching;
 namespace ProductCatalog.Products.Features.UpdateProduct;
 using ProductCatalog.Products.Events;
 using ProductCatalog.Products.Features.Media;
@@ -54,7 +55,8 @@ public record UpdateProductResult(
 
 internal class UpdateProductHandler(
     ProductCatalogDbContext dbContext,
-    ICloudinaryMediaService cloudinaryMediaService)
+    ICloudinaryMediaService cloudinaryMediaService,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateProductCommand, UpdateProductResult>
 {
     private static readonly string[] AllowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
@@ -365,6 +367,9 @@ internal class UpdateProductHandler(
                 product.Id, product.Name, firstImageUrl, product.UrlSlug, basePrice));
             await dbContext.SaveChangesAsync(cancellationToken);
         }
+
+        // Invalidate product and category caches
+        cacheInvalidator.Invalidate(CacheKeys.Products, CacheKeys.Categories);
 
         return new UpdateProductResult(
             product.Id,

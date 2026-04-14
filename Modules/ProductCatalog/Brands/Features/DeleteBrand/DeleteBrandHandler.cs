@@ -1,12 +1,10 @@
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Core.Caching;
 
 namespace ProductCatalog.Brands.Features.DeleteBrand;
 
 public record DeleteBrandCommand(Guid Id) : ICommand<bool>;
 
-internal class DeleteBrandHandler(ProductCatalogDbContext dbContext)
+internal class DeleteBrandHandler(ProductCatalogDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<DeleteBrandCommand, bool>
 {
     public async Task<bool> Handle(DeleteBrandCommand command, CancellationToken cancellationToken)
@@ -22,6 +20,7 @@ internal class DeleteBrandHandler(ProductCatalogDbContext dbContext)
 
         dbContext.Brands.Remove(brand);
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.Brands);
 
         return true;
     }

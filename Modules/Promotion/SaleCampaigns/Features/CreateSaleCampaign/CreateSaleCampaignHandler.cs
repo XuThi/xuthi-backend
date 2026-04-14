@@ -1,10 +1,11 @@
+using Core.Caching;
 using Promotion.SaleCampaigns.Events;
 
 namespace Promotion.SaleCampaigns.Features.CreateSaleCampaign;
 
 public record CreateSaleCampaignCommand(CreateSaleCampaignRequest Request) : ICommand<SaleCampaignResult>;
 
-internal class CreateSaleCampaignHandler(PromotionDbContext dbContext)
+internal class CreateSaleCampaignHandler(PromotionDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<CreateSaleCampaignCommand, SaleCampaignResult>
 {
     public async Task<SaleCampaignResult> Handle(CreateSaleCampaignCommand command, CancellationToken cancellationToken)
@@ -59,6 +60,7 @@ internal class CreateSaleCampaignHandler(PromotionDbContext dbContext)
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.SaleCampaigns, CacheKeys.ActiveSaleItems);
 
         return MapToResult(campaign);
     }

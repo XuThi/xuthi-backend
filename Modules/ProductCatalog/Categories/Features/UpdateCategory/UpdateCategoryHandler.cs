@@ -1,3 +1,4 @@
+using Core.Caching;
 namespace ProductCatalog.Categories.Features.UpdateCategory;
 
 public record UpdateCategoryCommand(Guid Id, UpdateCategoryRequest Request) : ICommand<CategoryResult>;
@@ -12,7 +13,7 @@ public record CategoryResult(
     int SortOrder
 );
 
-internal class UpdateCategoryHandler(ProductCatalogDbContext dbContext)
+internal class UpdateCategoryHandler(ProductCatalogDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateCategoryCommand, CategoryResult>
 {
     public async Task<CategoryResult> Handle(UpdateCategoryCommand command, CancellationToken cancellationToken)
@@ -35,6 +36,7 @@ internal class UpdateCategoryHandler(ProductCatalogDbContext dbContext)
         if (req.SortOrder.HasValue) category.SortOrder = req.SortOrder.Value;
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.Categories);
 
         return new CategoryResult(
             category.Id, category.Name, category.UrlSlug,

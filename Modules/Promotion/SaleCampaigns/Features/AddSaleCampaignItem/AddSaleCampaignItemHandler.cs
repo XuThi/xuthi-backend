@@ -1,8 +1,9 @@
+using Core.Caching;
 namespace Promotion.SaleCampaigns.Features.AddSaleCampaignItem;
 
 public record AddSaleCampaignItemCommand(Guid CampaignId, CreateSaleCampaignItemRequest Item) : ICommand<SaleCampaignItemResult>;
 
-internal class AddSaleCampaignItemHandler(PromotionDbContext dbContext)
+internal class AddSaleCampaignItemHandler(PromotionDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<AddSaleCampaignItemCommand, SaleCampaignItemResult>
 {
     public async Task<SaleCampaignItemResult> Handle(AddSaleCampaignItemCommand command, CancellationToken cancellationToken)
@@ -31,6 +32,7 @@ internal class AddSaleCampaignItemHandler(PromotionDbContext dbContext)
 
         dbContext.SaleCampaignItems.Add(item);
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.SaleCampaigns, CacheKeys.ActiveSaleItems);
 
         return new SaleCampaignItemResult(
             item.Id, item.ProductId, item.VariantId, item.SalePrice,

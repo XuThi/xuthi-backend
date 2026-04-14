@@ -77,6 +77,9 @@ public class StockReservationService(
             "Reserved stock for session {SessionKey}: {Count} items, expires at {ExpiresAt}",
             sessionKey, items.Count, expiresAt);
 
+        // Tell the cleanup background service to start checking again
+        BackgroundServices.StockReservationCleanupService.RequireCheck = true;
+
         return reservationIds;
     }
 

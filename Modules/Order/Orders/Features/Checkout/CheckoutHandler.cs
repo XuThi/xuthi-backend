@@ -240,6 +240,9 @@ internal class CheckoutHandler(
             paymentUrl = payResult.CheckoutUrl;
 
             await orderDb.SaveChangesAsync(cancellationToken);
+            
+            // Wake up the expired payment cleanup cronjob to start checking for expired links
+            BackgroundServices.ExpiredPaymentCleanupService.RequireCheck = true;
         }
         else if (req.PaymentMethod == PaymentMethod.CashOnDelivery)
         {

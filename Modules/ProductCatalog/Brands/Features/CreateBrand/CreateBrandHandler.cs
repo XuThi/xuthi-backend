@@ -1,9 +1,10 @@
+using Core.Caching;
 namespace ProductCatalog.Brands.Features.CreateBrand;
 
 public record CreateBrandCommand(string Name, string UrlSlug, string? Description, string? LogoUrl) : ICommand<CreateBrandResult>;
 public record CreateBrandResult(Guid Id, string Name, string UrlSlug, string? Description, string? LogoUrl);
 
-internal class CreateBrandHandler(ProductCatalogDbContext dbContext)
+internal class CreateBrandHandler(ProductCatalogDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<CreateBrandCommand, CreateBrandResult>
 {
     public async Task<CreateBrandResult> Handle(CreateBrandCommand command, CancellationToken cancellationToken)
@@ -19,6 +20,7 @@ internal class CreateBrandHandler(ProductCatalogDbContext dbContext)
 
         dbContext.Brands.Add(brand);
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.Brands);
 
         return MapToResult(brand);
     }

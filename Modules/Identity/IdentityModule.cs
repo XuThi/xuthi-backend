@@ -56,8 +56,8 @@ public static class IdentityModule
         .AddEntityFrameworkStores<IdentityDbContext>()
         .AddDefaultTokenProviders();
         
-        // Add Email service
-        builder.Services.AddScoped<IEmailService, EmailService>();
+        // Add Email service using Resend HTTP API
+        builder.Services.AddHttpClient<IEmailService, EmailService>();
 
         // Add auth feature handlers used by endpoint parameter binding
         builder.Services.AddScoped<ChangePasswordHandler>();

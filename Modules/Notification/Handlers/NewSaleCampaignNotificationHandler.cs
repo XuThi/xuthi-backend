@@ -34,16 +34,29 @@ internal class NewSaleCampaignNotificationHandler(
                 return;
             }
 
+            // Cap at 50 subscribers per notification to avoid spam flagging
+            var batch = subscribers.Take(50).ToList();
+            if (subscribers.Count > 50)
+            {
+                logger.LogWarning(
+                    "Too many subscribers ({Total}), capping notification batch to 50",
+                    subscribers.Count);
+            }
+
             var subject = $"Khuyến mãi mới: {notification.CampaignName} - XuThi Store";
             var htmlBody = BuildSaleCampaignHtml(notification);
 
             var sent = 0;
-            foreach (var email in subscribers)
+            foreach (var email in batch)
             {
                 try
                 {
                     await emailService.SendPromotionalEmailAsync(email, subject, htmlBody);
                     sent++;
+
+                    // Throttle: 200ms between emails to avoid spam flags
+                    if (sent < batch.Count)
+                        await Task.Delay(200, cancellationToken);
                 }
                 catch (Exception ex)
                 {

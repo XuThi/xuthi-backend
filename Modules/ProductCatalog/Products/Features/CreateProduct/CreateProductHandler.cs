@@ -1,3 +1,4 @@
+using Core.Caching;
 using Microsoft.AspNetCore.Http;
 using ProductCatalog.Products.Events;
 using ProductCatalog.Products.Features.Media;
@@ -45,7 +46,8 @@ public class CreateProductCommandValidator : AbstractValidator<CreateProductComm
 
 internal class CreateProductHandler(
     ProductCatalogDbContext dbContext,
-    ICloudinaryMediaService cloudinaryMediaService)
+    ICloudinaryMediaService cloudinaryMediaService,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<CreateProductCommand, CreateProductResult>
 {
     private static readonly string[] AllowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
@@ -69,16 +71,18 @@ internal class CreateProductHandler(
 
         // Create variants if provided
         var variantIds = new List<Guid>();
+        var usedSkus = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (request.Variants?.Count > 0)
         {
-            foreach (var vr in request.Variants)
+            foreach (var (vr, index) in request.Variants.Select((item, idx) => (item, idx)))
             {
+                var sku = await ResolveSkuAsync(vr.Sku, request.Name, index, usedSkus, cancellationToken);
                 var variant = new Variant
                 {
                     Id = Guid.NewGuid(),
                     ProductId = product.Id,
-                    Sku = vr.Sku,
-                    BarCode = vr.BarCode ?? vr.Sku, // Default barcode to SKU
+                    Sku = sku,
+                    BarCode = string.IsNullOrWhiteSpace(vr.BarCode) ? sku : vr.BarCode, // Default barcode to SKU
                     Price = vr.Price,
                     CompareAtPrice = vr.CompareAtPrice,
                     StockQuantity = vr.StockQuantity ?? 0,
@@ -190,7 +194,61 @@ internal class CreateProductHandler(
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
+        // Invalidate product and category caches
+        cacheInvalidator.Invalidate(CacheKeys.Products, CacheKeys.Categories);
+
         return new CreateProductResult(product.Id, variantIds, imageUrls);
+    }
+
+    // TODO: Refactor ahhh
+    private async Task<string> ResolveSkuAsync(
+        string? requestedSku,
+        string productName,
+        int variantIndex,
+        HashSet<string> usedSkus,
+        CancellationToken cancellationToken)
+    {
+        var rawSku = string.IsNullOrWhiteSpace(requestedSku)
+            ? BuildDefaultSku(productName, variantIndex)
+            : requestedSku.Trim();
+
+        var normalizedBase = NormalizeSku(rawSku);
+        var candidate = normalizedBase;
+        var suffix = 1;
+
+        while (usedSkus.Contains(candidate) || await dbContext.Variants.AnyAsync(v => v.Sku == candidate, cancellationToken))
+        {
+            candidate = $"{normalizedBase}-{suffix++:D2}";
+        }
+
+        usedSkus.Add(candidate);
+        return candidate;
+    }
+
+    private static string BuildDefaultSku(string productName, int variantIndex)
+    {
+        var productSegment = NormalizeSku(productName);
+        return $"{productSegment}-{variantIndex + 1:D2}";
+    }
+
+    private static string NormalizeSku(string value)
+    {
+        var normalized = value
+            .Normalize(System.Text.NormalizationForm.FormD)
+            .Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark)
+            .Aggregate(new System.Text.StringBuilder(), (sb, c) => sb.Append(c), sb => sb.ToString())
+            .Replace("đ", "d")
+            .Replace("Đ", "D")
+            .ToUpperInvariant();
+
+        normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"[^A-Z0-9]+", "-").Trim('-');
+
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            normalized = "SKU";
+        }
+
+        return normalized;
     }
 
     private static string GenerateSlug(string name)

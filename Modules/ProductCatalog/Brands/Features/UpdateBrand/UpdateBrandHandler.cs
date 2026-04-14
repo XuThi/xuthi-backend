@@ -1,3 +1,4 @@
+using Core.Caching;
 namespace ProductCatalog.Brands.Features.UpdateBrand;
 
 public record UpdateBrandCommand(Guid Id, UpdateBrandRequest Request) : ICommand<UpdateBrandResult>;
@@ -10,7 +11,7 @@ public record UpdateBrandResult(
     string? LogoUrl
 );
 
-internal class UpdateBrandHandler(ProductCatalogDbContext dbContext)
+internal class UpdateBrandHandler(ProductCatalogDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateBrandCommand, UpdateBrandResult>
 {
     public async Task<UpdateBrandResult> Handle(UpdateBrandCommand command, CancellationToken cancellationToken)
@@ -27,6 +28,7 @@ internal class UpdateBrandHandler(ProductCatalogDbContext dbContext)
         if (req.LogoUrl != null) brand.LogoUrl = req.LogoUrl;
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.Brands);
 
         return new UpdateBrandResult(
             brand.Id,

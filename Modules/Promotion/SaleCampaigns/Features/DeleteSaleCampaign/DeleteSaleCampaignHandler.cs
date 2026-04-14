@@ -1,8 +1,9 @@
+using Core.Caching;
 namespace Promotion.SaleCampaigns.Features.DeleteSaleCampaign;
 
 public record DeleteSaleCampaignCommand(Guid Id) : ICommand<bool>;
 
-internal class DeleteSaleCampaignHandler(PromotionDbContext dbContext)
+internal class DeleteSaleCampaignHandler(PromotionDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<DeleteSaleCampaignCommand, bool>
 {
     public async Task<bool> Handle(DeleteSaleCampaignCommand command, CancellationToken cancellationToken)
@@ -17,6 +18,7 @@ internal class DeleteSaleCampaignHandler(PromotionDbContext dbContext)
         dbContext.SaleCampaignItems.RemoveRange(campaign.Items);
         dbContext.SaleCampaigns.Remove(campaign);
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.SaleCampaigns, CacheKeys.ActiveSaleItems);
 
         return true;
     }

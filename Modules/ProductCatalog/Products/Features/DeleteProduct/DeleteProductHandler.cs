@@ -1,3 +1,4 @@
+using Core.Caching;
 namespace ProductCatalog.Products.Features.DeleteProduct;
 using ProductCatalog.Products.Features.Media;
 
@@ -5,7 +6,8 @@ public record DeleteProductCommand(Guid Id) : ICommand<bool>;
 
 internal class DeleteProductHandler(
     ProductCatalogDbContext dbContext,
-    ICloudinaryMediaService cloudinaryMediaService)
+    ICloudinaryMediaService cloudinaryMediaService,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<DeleteProductCommand, bool>
 {
     public async Task<bool> Handle(DeleteProductCommand command, CancellationToken cancellationToken)
@@ -42,6 +44,9 @@ internal class DeleteProductHandler(
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
+
+        // Invalidate product and category caches
+        cacheInvalidator.Invalidate(CacheKeys.Products, CacheKeys.Categories);
 
         return true;
     }

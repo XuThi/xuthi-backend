@@ -1,3 +1,6 @@
+using Core.Caching;
+using Microsoft.Extensions.Caching.Memory;
+
 namespace Promotion.SaleCampaigns.Features.GetSaleCampaigns;
 
 public record GetSaleCampaignsQuery(
@@ -10,11 +13,28 @@ public record GetSaleCampaignsQuery(
     int PageSize = 20
 ) : IQuery<SaleCampaignsResult>;
 
-internal class GetSaleCampaignsHandler(PromotionDbContext dbContext)
+internal class GetSaleCampaignsHandler(
+    PromotionDbContext dbContext,
+    IMemoryCache cache,
+    ICacheInvalidator cacheInvalidator)
     : IQueryHandler<GetSaleCampaignsQuery, SaleCampaignsResult>
 {
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+
     public async Task<SaleCampaignsResult> Handle(GetSaleCampaignsQuery query, CancellationToken cancellationToken)
     {
+        var cacheKey = CacheKeys.Build(CacheKeys.SaleCampaigns,
+            $"active={query.IsActive}",
+            $"featured={query.IsFeatured}",
+            $"type={query.Type}",
+            $"running={query.OnlyRunning}",
+            $"upcoming={query.OnlyUpcoming}",
+            $"p={query.Page}",
+            $"ps={query.PageSize}");
+
+        if (cache.TryGetValue(cacheKey, out SaleCampaignsResult? cached) && cached is not null)
+            return cached;
+
         var q = dbContext.SaleCampaigns.Include(c => c.Items).AsQueryable();
 
         if (query.IsActive.HasValue)
@@ -42,7 +62,7 @@ internal class GetSaleCampaignsHandler(PromotionDbContext dbContext)
             .Take(query.PageSize)
             .ToListAsync(cancellationToken);
 
-        return new SaleCampaignsResult(
+        var result = new SaleCampaignsResult(
             items.Select(c => new SaleCampaignResult(
                 c.Id, c.Name, c.Slug, c.Description, c.BannerImageUrl,
                 c.Type, c.StartDate, c.EndDate, c.IsActive, c.IsFeatured,
@@ -52,5 +72,10 @@ internal class GetSaleCampaignsHandler(PromotionDbContext dbContext)
             query.Page,
             query.PageSize
         );
+
+        cache.Set(cacheKey, result, CacheDuration);
+        cacheInvalidator.TrackKey(cacheKey);
+
+        return result;
     }
 }

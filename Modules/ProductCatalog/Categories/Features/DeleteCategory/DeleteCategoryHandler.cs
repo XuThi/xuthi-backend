@@ -1,8 +1,9 @@
+using Core.Caching;
 namespace ProductCatalog.Categories.Features.DeleteCategory;
 
 public record DeleteCategoryCommand(Guid Id) : ICommand<bool>;
 
-internal class DeleteCategoryHandler(ProductCatalogDbContext dbContext)
+internal class DeleteCategoryHandler(ProductCatalogDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<DeleteCategoryCommand, bool>
 {
     public async Task<bool> Handle(DeleteCategoryCommand command, CancellationToken cancellationToken)
@@ -17,6 +18,7 @@ internal class DeleteCategoryHandler(ProductCatalogDbContext dbContext)
 
         dbContext.Categories.Remove(category);
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.Categories);
 
         return true;
     }

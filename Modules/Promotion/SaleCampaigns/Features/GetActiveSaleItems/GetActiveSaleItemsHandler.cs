@@ -1,3 +1,6 @@
+using Core.Caching;
+using Microsoft.Extensions.Caching.Memory;
+
 namespace Promotion.SaleCampaigns.Features.GetActiveSaleItems;
 
 public record GetActiveSaleItemsQuery(
@@ -18,11 +21,24 @@ public record ActiveSaleItemResult(
     decimal? DiscountPercentage
 );
 
-internal class GetActiveSaleItemsHandler(PromotionDbContext dbContext)
+internal class GetActiveSaleItemsHandler(
+    PromotionDbContext dbContext,
+    IMemoryCache cache,
+    ICacheInvalidator cacheInvalidator)
     : IQueryHandler<GetActiveSaleItemsQuery, GetActiveSaleItemsResult>
 {
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+
     public async Task<GetActiveSaleItemsResult> Handle(GetActiveSaleItemsQuery query, CancellationToken ct)
     {
+        // Build cache key from sorted IDs for deterministic hashing
+        var pidKey = string.Join(",", query.ProductIds.OrderBy(x => x));
+        var vidKey = string.Join(",", query.VariantIds.OrderBy(x => x));
+        var cacheKey = CacheKeys.Build(CacheKeys.ActiveSaleItems, $"p={pidKey}", $"v={vidKey}");
+
+        if (cache.TryGetValue(cacheKey, out GetActiveSaleItemsResult? cached) && cached is not null)
+            return cached;
+
         var now = DateTime.UtcNow;
 
         var itemsQuery = dbContext.SaleCampaignItems
@@ -44,12 +60,16 @@ internal class GetActiveSaleItemsHandler(PromotionDbContext dbContext)
             .ThenBy(i => i.SalePrice)
             .ToListAsync(ct);
 
-        var result = items.Select(i => new ActiveSaleItemResult(
-            i.Id, i.SaleCampaignId, i.SaleCampaign.Name,
-            i.ProductId, i.VariantId, i.SalePrice,
-            i.OriginalPrice, i.DiscountPercentage
-        )).ToList();
+        var result = new GetActiveSaleItemsResult(
+            items.Select(i => new ActiveSaleItemResult(
+                i.Id, i.SaleCampaignId, i.SaleCampaign.Name,
+                i.ProductId, i.VariantId, i.SalePrice,
+                i.OriginalPrice, i.DiscountPercentage
+            )).ToList());
 
-        return new GetActiveSaleItemsResult(result);
+        cache.Set(cacheKey, result, CacheDuration);
+        cacheInvalidator.TrackKey(cacheKey);
+
+        return result;
     }
 }

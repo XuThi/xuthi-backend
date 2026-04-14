@@ -1,8 +1,9 @@
+using Core.Caching;
 namespace Promotion.SaleCampaigns.Features.UpdateSaleCampaignItem;
 
 public record UpdateSaleCampaignItemCommand(Guid ItemId, UpdateSaleCampaignItemRequest Request) : ICommand<SaleCampaignItemResult>;
 
-internal class UpdateSaleCampaignItemHandler(PromotionDbContext dbContext)
+internal class UpdateSaleCampaignItemHandler(PromotionDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateSaleCampaignItemCommand, SaleCampaignItemResult>
 {
     public async Task<SaleCampaignItemResult> Handle(UpdateSaleCampaignItemCommand command, CancellationToken cancellationToken)
@@ -18,6 +19,7 @@ internal class UpdateSaleCampaignItemHandler(PromotionDbContext dbContext)
         if (req.MaxQuantity.HasValue) item.MaxQuantity = req.MaxQuantity.Value;
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.SaleCampaigns, CacheKeys.ActiveSaleItems);
 
         return new SaleCampaignItemResult(
             item.Id, item.ProductId, item.VariantId, item.SalePrice,

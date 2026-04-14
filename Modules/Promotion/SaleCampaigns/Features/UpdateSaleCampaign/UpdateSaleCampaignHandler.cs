@@ -1,8 +1,9 @@
+using Core.Caching;
 namespace Promotion.SaleCampaigns.Features.UpdateSaleCampaign;
 
 public record UpdateSaleCampaignCommand(Guid Id, UpdateSaleCampaignRequest Request) : ICommand<SaleCampaignResult>;
 
-internal class UpdateSaleCampaignHandler(PromotionDbContext dbContext)
+internal class UpdateSaleCampaignHandler(PromotionDbContext dbContext, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateSaleCampaignCommand, SaleCampaignResult>
 {
     public async Task<SaleCampaignResult> Handle(UpdateSaleCampaignCommand command, CancellationToken cancellationToken)
@@ -35,6 +36,7 @@ internal class UpdateSaleCampaignHandler(PromotionDbContext dbContext)
             await EnsureNoActiveOverlaps(campaign, cancellationToken);
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        cacheInvalidator.Invalidate(CacheKeys.SaleCampaigns, CacheKeys.ActiveSaleItems);
 
         return new SaleCampaignResult(
             campaign.Id, campaign.Name, campaign.Slug, campaign.Description,

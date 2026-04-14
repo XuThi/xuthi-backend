@@ -1,3 +1,6 @@
+using Core.Caching;
+using Microsoft.Extensions.Caching.Memory;
+
 namespace ProductCatalog.Products.Features.SearchProducts;
 
 /// <summary>
@@ -60,13 +63,32 @@ public record ProductVariantItem(
     Dictionary<string, string> Attributes // e.g. {"size": "37"}
 );
 
-internal class SearchProductsHandler(ProductCatalogDbContext dbContext)
+internal class SearchProductsHandler(
+    ProductCatalogDbContext dbContext,
+    IMemoryCache cache,
+    ICacheInvalidator cacheInvalidator)
     : IQueryHandler<SearchProductsQuery, SearchProductsResult>
 {
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+
     public async Task<SearchProductsResult> Handle(SearchProductsQuery request, CancellationToken cancellationToken)
     {
         var req = request.Request;
+        var cacheKey = BuildCacheKey(req);
 
+        if (cache.TryGetValue(cacheKey, out SearchProductsResult? cached) && cached is not null)
+            return cached;
+
+        var result = await QueryFromDatabase(req, cancellationToken);
+
+        cache.Set(cacheKey, result, CacheDuration);
+        cacheInvalidator.TrackKey(cacheKey);
+
+        return result;
+    }
+
+    private async Task<SearchProductsResult> QueryFromDatabase(SearchProductsRequest req, CancellationToken cancellationToken)
+    {
         // Start with base query - include all related data
         var query = dbContext.Products
             .Include(p => p.Category)
@@ -213,5 +235,20 @@ internal class SearchProductsHandler(ProductCatalogDbContext dbContext)
 
             _ => query.OrderByDescending(p => p.CreatedAt) // Default: newest first
         };
+    }
+
+    private static string BuildCacheKey(SearchProductsRequest req)
+    {
+        return CacheKeys.Build(CacheKeys.Products,
+            $"q={req.Query}",
+            $"cat={req.CategoryId}",
+            $"brand={req.BrandId}",
+            $"min={req.MinPrice}",
+            $"max={req.MaxPrice}",
+            $"active={req.IsActive}",
+            $"sort={req.SortBy}",
+            $"desc={req.SortDescending}",
+            $"p={req.Page}",
+            $"ps={req.PageSize}");
     }
 }

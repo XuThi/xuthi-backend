@@ -1,3 +1,6 @@
+using Core.Caching;
+using Microsoft.Extensions.Caching.Memory;
+
 namespace ProductCatalog.Categories.Features.GetCategories;
 
 public record GetCategoriesQuery(Guid? ParentId = null) : IQuery<GetCategoriesResult>;
@@ -15,11 +18,21 @@ public record CategoryItem(
     int ProductCount
 );
 
-internal class GetCategoriesHandler(ProductCatalogDbContext dbContext)
+internal class GetCategoriesHandler(
+    ProductCatalogDbContext dbContext,
+    IMemoryCache cache,
+    ICacheInvalidator cacheInvalidator)
     : IQueryHandler<GetCategoriesQuery, GetCategoriesResult>
 {
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(10);
+
     public async Task<GetCategoriesResult> Handle(GetCategoriesQuery request, CancellationToken cancellationToken)
     {
+        var cacheKey = CacheKeys.Build(CacheKeys.Categories, $"parent={request.ParentId}");
+
+        if (cache.TryGetValue(cacheKey, out GetCategoriesResult? cached) && cached is not null)
+            return cached;
+
         var query = dbContext.Categories.AsQueryable();
 
         // Filter by parent category if specified
@@ -43,6 +56,11 @@ internal class GetCategoriesHandler(ProductCatalogDbContext dbContext)
             ))
             .ToListAsync(cancellationToken);
 
-        return new GetCategoriesResult(categories);
+        var result = new GetCategoriesResult(categories);
+
+        cache.Set(cacheKey, result, CacheDuration);
+        cacheInvalidator.TrackKey(cacheKey);
+
+        return result;
     }
 }

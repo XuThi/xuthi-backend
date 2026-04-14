@@ -23,7 +23,7 @@ internal class OrderCreatedEmailHandler(
 
         try
         {
-            await emailService.SendEmailAsync(notification.CustomerEmail, subject, htmlBody);
+            await emailService.SendOrderEmailAsync(notification.CustomerEmail, subject, htmlBody);
             logger.LogInformation("Order confirmation email sent for {OrderNumber}", notification.OrderNumber);
         }
         catch (Exception ex)
