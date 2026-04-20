@@ -1,13 +1,17 @@
+using System.Net;
+using System.Net.Mail;
 using System.Text;
 using System.Text.Json;
+using Core.Security;
 
 namespace Identity.Users.Services;
 
 public interface IEmailService
 {
     Task SendEmailAsync(string to, string subject, string htmlBody);
-    Task SendPromotionalEmailAsync(string to, string subject, string htmlBody);
+    Task SendPromotionalEmailAsync(string to, string subject, string htmlBody, string? textBody = null);
     Task SendOrderEmailAsync(string to, string subject, string htmlBody);
+    Task SendOwnerOrderAlertAsync(string subject, string htmlBody);
     Task SendVerificationEmailAsync(string to, string verificationLink);
     Task SendPasswordResetEmailAsync(string to, string resetLink);
 }
@@ -23,10 +27,24 @@ public class EmailService(HttpClient httpClient, IConfiguration configuration, I
     private readonly string _authFromEmail = configuration["Resend:AuthFromEmail"];
     private readonly string _marketingFromEmail = configuration["Resend:MarketingFromEmail"];
     private readonly string _ordersFromEmail = configuration["Resend:OrdersFromEmail"];
+    private readonly string _unsubscribeBaseUrl = configuration["Resend:UnsubscribeBaseUrl"];
+    private readonly string _unsubscribeSigningKey = configuration["Resend:UnsubscribeSigningKey"] ?? configuration["Jwt:Key"];
 
     private readonly string _replyToEmail = configuration["Resend:ReplyToEmail"];
 
-    private async Task SendViaResendAsync(string fromEmail, string to, string subject, string htmlBody, Dictionary<string, string>? extraHeaders = null)
+    private readonly string _smtpHost = configuration["Email:SmtpHost"];
+    private readonly int _smtpPort = Int32.Parse(configuration["Email:SmtpPort"]);
+    private readonly string _smtpEmail = configuration["Email:SmtpEmail"];
+    private readonly string _smtpPassword = configuration["Email:SmtpPassword"];
+    private readonly string _smtpFromName = configuration["Email:FromName"];
+
+    private async Task SendViaResendAsync(
+        string fromEmail,
+        string to,
+        string subject,
+        string htmlBody,
+        Dictionary<string, string>? extraHeaders = null,
+        string? textBody = null)
     {
         if (string.IsNullOrEmpty(_apiKey) || _apiKey == "re_YOUR_RESEND_API_KEY_HERE")
         {
@@ -34,19 +52,27 @@ public class EmailService(HttpClient httpClient, IConfiguration configuration, I
             return;
         }
 
-        object payload;
-        
-        if (string.IsNullOrEmpty(_replyToEmail))
+        var payload = new Dictionary<string, object?>
         {
-            payload = extraHeaders != null
-                ? (object)new { from = $"{_fromName} <{fromEmail}>", to = new[] { to }, subject, html = htmlBody, headers = extraHeaders }
-                : new { from = $"{_fromName} <{fromEmail}>", to = new[] { to }, subject, html = htmlBody };
+            ["from"] = $"{_fromName} <{fromEmail}>",
+            ["to"] = new[] { to },
+            ["subject"] = subject,
+            ["html"] = htmlBody
+        };
+
+        if (!string.IsNullOrWhiteSpace(textBody))
+        {
+            payload["text"] = textBody;
         }
-        else
+
+        if (!string.IsNullOrWhiteSpace(_replyToEmail))
         {
-            payload = extraHeaders != null
-                ? (object)new { from = $"{_fromName} <{fromEmail}>", to = new[] { to }, reply_to = _replyToEmail, subject, html = htmlBody, headers = extraHeaders }
-                : new { from = $"{_fromName} <{fromEmail}>", to = new[] { to }, reply_to = _replyToEmail, subject, html = htmlBody };
+            payload["reply_to"] = _replyToEmail;
+        }
+
+        if (extraHeaders is { Count: > 0 })
+        {
+            payload["headers"] = extraHeaders;
         }
 
         var json = JsonSerializer.Serialize(payload);
@@ -82,22 +108,77 @@ public class EmailService(HttpClient httpClient, IConfiguration configuration, I
     }
 
     /// <summary>Marketing emails (new products, sale campaigns) — from marketing@</summary>
-    public async Task SendPromotionalEmailAsync(string to, string subject, string htmlBody)
+    public async Task SendPromotionalEmailAsync(string to, string subject, string htmlBody, string? textBody = null)
     {
+        var unsubscribeUrl = BuildUnsubscribeUrl(to);
+
         var headers = new Dictionary<string, string>
         {
             ["Precedence"] = "bulk",
             ["X-Auto-Response-Suppress"] = "All",
             ["X-Mailer"] = "XuThi Store Marketing",
-            ["List-Unsubscribe"] = $"<mailto:{_authFromEmail}?subject=unsubscribe>"
+            ["List-Id"] = "XuThi Store Marketing <marketing.xuthi.store>",
+            ["List-Unsubscribe"] = $"<{unsubscribeUrl}>, <mailto:{_marketingFromEmail}?subject=unsubscribe>",
+            ["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click",
+            ["Feedback-ID"] = "xuthi:marketing:newsletter"
         };
-        await SendViaResendAsync(_marketingFromEmail, to, subject, htmlBody, headers);
+        await SendViaResendAsync(_marketingFromEmail, to, subject, htmlBody, headers, textBody);
+    }
+
+    private string BuildUnsubscribeUrl(string recipientEmail)
+    {
+        if (string.IsNullOrWhiteSpace(_unsubscribeSigningKey))
+            return _unsubscribeBaseUrl;
+
+        var token = MarketingUnsubscribeToken.CreateToken(
+            recipientEmail,
+            _unsubscribeSigningKey,
+            DateTimeOffset.UtcNow.AddDays(365));
+
+        var separator = _unsubscribeBaseUrl.Contains('?') ? '&' : '?';
+        return $"{_unsubscribeBaseUrl}{separator}token={Uri.EscapeDataString(token)}";
     }
 
     /// <summary>Order emails (confirmation, status updates) — from orders@</summary>
     public async Task SendOrderEmailAsync(string to, string subject, string htmlBody)
     {
         await SendViaResendAsync(_ordersFromEmail, to, subject, htmlBody);
+    }
+
+    public async Task SendOwnerOrderAlertAsync(string subject, string htmlBody)
+    {
+        if (string.IsNullOrWhiteSpace(_smtpHost)
+            || string.IsNullOrWhiteSpace(_smtpEmail)
+            || string.IsNullOrWhiteSpace(_smtpPassword))
+        {
+            logger.LogWarning("SMTP configuration is missing for owner alert email.");
+            return;
+        }
+
+        await SendViaSmtpAsync(_smtpEmail, subject, htmlBody);
+    }
+
+    private async Task SendViaSmtpAsync(string to, string subject, string htmlBody)
+    {
+        using var message = new MailMessage
+        {
+            From = new MailAddress(_smtpEmail, _smtpFromName),
+            Subject = subject,
+            Body = htmlBody,
+            IsBodyHtml = true,
+            SubjectEncoding = Encoding.UTF8,
+            BodyEncoding = Encoding.UTF8
+        };
+
+        message.To.Add(new MailAddress(to));
+
+        using var smtpClient = new SmtpClient(_smtpHost, _smtpPort)
+        {
+            EnableSsl = true,
+            Credentials = new NetworkCredential(_smtpEmail, _smtpPassword)
+        };
+
+        await smtpClient.SendMailAsync(message);
     }
 
     public async Task SendPasswordResetEmailAsync(string to, string resetLink)

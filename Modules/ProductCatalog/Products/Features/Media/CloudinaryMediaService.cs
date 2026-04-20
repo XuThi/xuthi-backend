@@ -3,6 +3,7 @@ using CloudinaryDotNet.Actions;
 
 namespace ProductCatalog.Products.Features.Media;
 
+// TODO: Add config static class to read Cloudinary settings once and cache them, instead of reading from IConfiguration on every request.
 public interface ICloudinaryMediaService
 {
     Task<(string Url, string? PublicId)> UploadImageAsync(IFormFile file, string folder, CancellationToken cancellationToken);
@@ -23,7 +24,6 @@ internal class CloudinaryMediaService(
         var cloudinary = CreateCloudinaryClient(settings);
         await using var fileStream = file.OpenReadStream();
 
-        ImageUploadResult result;
         var uploadParams = new ImageUploadParams
         {
             File = new FileDescription(file.FileName, fileStream),
@@ -33,7 +33,7 @@ internal class CloudinaryMediaService(
         if (!string.IsNullOrWhiteSpace(settings.UploadPreset))
             uploadParams.UploadPreset = settings.UploadPreset;
 
-        result = await cloudinary.UploadAsync(uploadParams, cancellationToken);
+        var result = await cloudinary.UploadAsync(uploadParams, cancellationToken);
 
         if (result.Error is not null)
             throw new InvalidOperationException($"Cloudinary upload failed: {result.Error.Message}");
@@ -72,7 +72,7 @@ internal class CloudinaryMediaService(
             && !string.IsNullOrWhiteSpace(apiSecret))
             return (cloudName, apiKey, apiSecret, uploadPreset);
 
-        var cloudinaryUrl = cfg["CLOUDINARY_URL"];
+        var cloudinaryUrl = cfg["Cloudinary:Url"];
         if (!string.IsNullOrWhiteSpace(cloudinaryUrl)
             && Uri.TryCreate(cloudinaryUrl, UriKind.Absolute, out var cloudinaryUri)
             && cloudinaryUri.Scheme.Equals("cloudinary", StringComparison.OrdinalIgnoreCase))

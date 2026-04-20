@@ -1,5 +1,5 @@
-using Customer.Customers.Features;
 using Customer.Customers.Features.AddCustomerOrder;
+using Order.Orders.Events;
 using Order.Orders.Services;
 using ProductCatalog.Data;
 using ProductCatalog.Products.Services;
@@ -190,24 +190,12 @@ internal class CheckoutHandler(
             Items = orderItems
         };
 
-        // Raise domain event for notifications
-        order.AddDomainEvent(new Events.OrderCreatedEvent(
-            order.Id,
-            order.OrderNumber,
-            order.CustomerName,
-            order.CustomerEmail,
-            order.CustomerPhone,
-            order.ShippingAddress,
-            order.ShippingCity,
-            order.ShippingWard,
-            order.Subtotal,
-            order.DiscountAmount,
-            order.ShippingFee,
-            order.Total,
-            orderItems.Select(i => new Events.OrderCreatedEventItem(
-                i.ProductName, i.VariantDescription, i.Quantity, i.TotalPrice
-            )).ToList()
-        ));
+        // COD can send order notifications immediately.
+        // PayOS notifications are published only after webhook confirms payment success.
+        if (req.PaymentMethod == PaymentMethod.CashOnDelivery)
+        {
+            order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
+        }
 
         // 5. Reserve stock (5-minute TTL — cleanup cronjob releases expired ones)
         var sessionKey = $"order:{order.Id}";
@@ -230,8 +218,8 @@ internal class CheckoutHandler(
         if (req.PaymentMethod == PaymentMethod.PayOS)
         {
             // Create PayOS payment link
-            var returnUrl = req.ReturnUrl ?? "http://localhost:3000/checkout/success";
-            var cancelUrl = req.CancelUrl ?? "http://localhost:3000/checkout/cancel";
+            var returnUrl = AppendOrderIdToUrl(req.ReturnUrl, order.Id);
+            var cancelUrl = AppendOrderIdToUrl(req.CancelUrl, order.Id);
 
             var payResult = await paymentService.CreatePaymentLinkAsync(
                 order, returnUrl, cancelUrl, cancellationToken);
@@ -271,6 +259,15 @@ internal class CheckoutHandler(
             order.Status.ToString(),
             paymentUrl
         );
+    }
+
+    private static string AppendOrderIdToUrl(string url, Guid orderId)
+    {
+        if (url.Contains("orderId=", StringComparison.OrdinalIgnoreCase))
+            return url;
+
+        var separator = url.Contains('?') ? "&" : "?";
+        return $"{url}{separator}orderId={Uri.EscapeDataString(orderId.ToString())}";
     }
 
     private static string GenerateOrderNumber()

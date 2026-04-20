@@ -25,6 +25,10 @@ internal class OrderCreatedEmailHandler(
         {
             await emailService.SendOrderEmailAsync(notification.CustomerEmail, subject, htmlBody);
             logger.LogInformation("Order confirmation email sent for {OrderNumber}", notification.OrderNumber);
+
+            var ownerSubject = $"[ĐƠN MỚI] #{notification.OrderNumber} - {notification.Total:N0} VND";
+            var ownerHtmlBody = BuildOwnerOrderAlertHtml(notification);
+            await emailService.SendOwnerOrderAlertAsync(ownerSubject, ownerHtmlBody);
         }
         catch (Exception ex)
         {
@@ -119,6 +123,60 @@ internal class OrderCreatedEmailHandler(
                                     <p style="margin: 0; color: #999; font-size: 12px;">XuThi Store</p>
                                 </td>
                             </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        """;
+    }
+
+    private static string BuildOwnerOrderAlertHtml(OrderCreatedEvent order)
+    {
+        var itemRows = string.Join("", order.Items.Select(item =>
+            $"""<tr><td style="padding: 10px 0; border-bottom: 1px solid #eee;">{item.ProductName}</td><td style="padding: 10px 0; border-bottom: 1px solid #eee; text-align: center;">{item.Quantity}</td><td style="padding: 10px 0; border-bottom: 1px solid #eee; text-align: right;">{item.TotalPrice:N0}₫</td></tr>"""));
+
+        return $$"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #222; margin: 0; padding: 20px; background: #f7f7f7;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 680px; margin: 0 auto; background: #fff; border: 1px solid #eee;">
+                <tr>
+                    <td style="padding: 20px 24px; border-bottom: 1px solid #eee;">
+                        <h2 style="margin: 0; font-size: 20px;">Đơn hàng mới {{order.OrderNumber}}</h2>
+                        <p style="margin: 8px 0 0 0; color: #666;">Tạo lúc: {{DateTime.UtcNow:yyyy-MM-dd HH:mm}} UTC</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding: 20px 24px;">
+                        <p style="margin: 0 0 8px 0;"><strong>Khách hàng:</strong> {{order.CustomerName}}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Email:</strong> {{order.CustomerEmail}}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Điện thoại:</strong> {{order.CustomerPhone}}</p>
+                        <p style="margin: 0 0 16px 0;"><strong>Địa chỉ:</strong> {{order.ShippingAddress}}, {{order.ShippingWard}}, {{order.ShippingCity}}</p>
+
+                        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                            <thead>
+                                <tr>
+                                    <th style="text-align: left; border-bottom: 2px solid #111; padding: 10px 0;">Sản phẩm</th>
+                                    <th style="text-align: center; border-bottom: 2px solid #111; padding: 10px 0; width: 80px;">SL</th>
+                                    <th style="text-align: right; border-bottom: 2px solid #111; padding: 10px 0; width: 140px;">Thành tiền</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{itemRows}}
+                            </tbody>
+                        </table>
+
+                        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 16px;">
+                            <tr><td style="text-align: right; color: #555;">Tạm tính:</td><td style="text-align: right; width: 160px;">{{order.Subtotal:N0}}₫</td></tr>
+                            <tr><td style="text-align: right; color: #555;">Giảm giá:</td><td style="text-align: right; width: 160px;">-{{order.DiscountAmount:N0}}₫</td></tr>
+                            <tr><td style="text-align: right; color: #555;">Phí ship:</td><td style="text-align: right; width: 160px;">{{order.ShippingFee:N0}}₫</td></tr>
+                            <tr><td style="text-align: right; font-weight: 700; padding-top: 8px; border-top: 1px solid #111;">Tổng cộng:</td><td style="text-align: right; width: 160px; font-weight: 700; padding-top: 8px; border-top: 1px solid #111;">{{order.Total:N0}}₫</td></tr>
                         </table>
                     </td>
                 </tr>

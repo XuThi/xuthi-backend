@@ -1,6 +1,8 @@
 using Customer.Data;
 using Identity.Users.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Promotion.SaleCampaigns.Events;
+using Promotion.SaleCampaigns.Models;
 
 namespace Notification.Handlers;
 
@@ -9,92 +11,70 @@ namespace Notification.Handlers;
 /// Triggered by SaleCampaignCreatedEvent domain event via MediatR.
 /// </summary>
 internal class NewSaleCampaignNotificationHandler(
-    CustomerDbContext customerDb,
-    IEmailService emailService,
-    ILogger<NewSaleCampaignNotificationHandler> logger)
+    IServiceScopeFactory scopeFactory)
     : INotificationHandler<SaleCampaignCreatedEvent>
 {
-    public async Task Handle(SaleCampaignCreatedEvent notification, CancellationToken cancellationToken)
+    public Task Handle(SaleCampaignCreatedEvent notification, CancellationToken cancellationToken)
     {
-        logger.LogInformation(
-            "New sale campaign created: {CampaignName} ({CampaignId}). Notifying subscribers...",
-            notification.CampaignName, notification.CampaignId);
+        _ = Task.Run(() => SendNotificationBatchAsync(notification), CancellationToken.None);
 
-        try
+        return Task.CompletedTask;
+    }
+
+    private async Task SendNotificationBatchAsync(SaleCampaignCreatedEvent notification)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var customerDb = scope.ServiceProvider.GetRequiredService<CustomerDbContext>();
+        var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
+
+        var subscribers = await customerDb.Customers
+            .Where(c => c.AcceptsMarketing && c.Email != null)
+            .Select(c => c.Email)
+            .ToListAsync();
+
+        var batch = subscribers.Take(50).ToList();
+        if (batch.Count == 0)
+            return;
+
+        var subject = $"Cập nhật chương trình giảm giá: {notification.CampaignName}";
+        var htmlBody = BuildSaleCampaignHtml(notification);
+        var textBody = BuildSaleCampaignText(notification);
+
+        for (var i = 0; i < batch.Count; i++)
         {
-            // Get all customers who subscribed to marketing emails
-            var subscribers = await customerDb.Customers
-                .Where(c => c.AcceptsMarketing && c.Email != null)
-                .Select(c => c.Email)
-                .ToListAsync(cancellationToken);
+            await emailService.SendPromotionalEmailAsync(batch[i], subject, htmlBody, textBody);
 
-            if (subscribers.Count == 0)
-            {
-                logger.LogInformation("No subscribers to notify for new sale campaign.");
-                return;
-            }
-
-            // Cap at 50 subscribers per notification to avoid spam flagging
-            var batch = subscribers.Take(50).ToList();
-            if (subscribers.Count > 50)
-            {
-                logger.LogWarning(
-                    "Too many subscribers ({Total}), capping notification batch to 50",
-                    subscribers.Count);
-            }
-
-            var subject = $"Khuyến mãi mới: {notification.CampaignName} - XuThi Store";
-            var htmlBody = BuildSaleCampaignHtml(notification);
-
-            var sent = 0;
-            foreach (var email in batch)
-            {
-                try
-                {
-                    await emailService.SendPromotionalEmailAsync(email, subject, htmlBody);
-                    sent++;
-
-                    // Throttle: 200ms between emails to avoid spam flags
-                    if (sent < batch.Count)
-                        await Task.Delay(200, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to send sale campaign email to {Email}", email);
-                }
-            }
-
-            logger.LogInformation(
-                "Sale campaign notification sent to {SentCount}/{TotalCount} subscribers",
-                sent, subscribers.Count);
-        }
-        catch (Exception ex)
-        {
-            // Don't fail the campaign creation flow
-            logger.LogError(ex, "Failed to send sale campaign notifications for {CampaignId}", notification.CampaignId);
+            if (i < batch.Count - 1)
+                await Task.Delay(200);
         }
     }
 
     private static string BuildSaleCampaignHtml(SaleCampaignCreatedEvent campaign)
     {
         var bannerSection = !string.IsNullOrEmpty(campaign.BannerImageUrl)
-            ? $"""<tr><td style="padding: 0;"><img src="{campaign.BannerImageUrl}" alt="{campaign.CampaignName}" style="width: 100%; max-width: 600px; height: auto; display: block;" /></td></tr>"""
+            ? $"""
+            <tr>
+                <td style="padding: 6px 20px 0 20px; text-align: center;">
+                    <img src="{campaign.BannerImageUrl}" alt="{campaign.CampaignName}" style="width: 100%; max-width: 360px; height: auto; border: 1px solid #e5e7eb; border-radius: 4px;" />
+                </td>
+            </tr>
+            """
             : "";
 
         var campaignLink = campaign.Slug is not null
-            ? $"https://xuthi.store/sale/{campaign.Slug}"
-            : "https://xuthi.store";
+            ? $"https://xuthi.com/sale/{campaign.Slug}"
+            : "https://xuthi.com";
 
         var typeLabel = campaign.Type switch
         {
-            Promotion.SaleCampaigns.Models.SaleCampaignType.FlashSale => "FLASH SALE",
-            Promotion.SaleCampaigns.Models.SaleCampaignType.SeasonalSale => "KHUYẾN MÃI THEO MÙA",
-            Promotion.SaleCampaigns.Models.SaleCampaignType.Clearance => "XẢ HÀNG",
-            Promotion.SaleCampaigns.Models.SaleCampaignType.MemberExclusive => "ƯU ĐÃI THÀNH VIÊN",
+            SaleCampaignType.FlashSale => "FLASH SALE",
+            SaleCampaignType.SeasonalSale => "KHUYẾN MÃI THEO MÙA",
+            SaleCampaignType.Clearance => "XẢ HÀNG",
+            SaleCampaignType.MemberExclusive => "ƯU ĐÃI THÀNH VIÊN",
             _ => "KHUYẾN MÃI"
         };
 
-        var dateRange = $"{campaign.StartDate:dd/MM/yyyy} — {campaign.EndDate:dd/MM/yyyy}";
+        var dateRange = $"{campaign.StartDate:dd/MM/yyyy} - {campaign.EndDate:dd/MM/yyyy}";
 
         return $$"""
         <!DOCTYPE html>
@@ -103,45 +83,61 @@ internal class NewSaleCampaignNotificationHandler(
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
         </head>
-        <body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333;">
-            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 40px 20px;">
+        <body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: Arial, Helvetica, sans-serif; color: #1f2937;">
+            <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+                XuThi Store cập nhật chương trình giảm giá mới cho khách hàng đã đăng ký nhận tin.
+            </div>
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 16px 8px;">
                 <tr>
                     <td align="center">
-                        <table width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%;">
-                            <!-- Header -->
+                        <table width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden;">
                             <tr>
-                                <td style="background-color: #000000; padding: 32px 40px; text-align: center;">
-                                    <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: #ffffff; letter-spacing: 2px;">XUTHI STORE</h1>
+                                <td style="padding: 12px 20px; border-bottom: 1px solid #f3f4f6;">
+                                    <p style="margin: 0; font-size: 16px; line-height: 22px; font-weight: 700; color: #111827;">XuThi Store</p>
+                                    <p style="margin: 1px 0 0 0; font-size: 12px; line-height: 16px; color: #6b7280;">Bản tin cập nhật khuyến mãi</p>
                                 </td>
                             </tr>
-                            <!-- Banner Image -->
+                            <tr>
+                                <td style="padding: 10px 20px 0 20px; color: #374151; font-size: 14px; line-height: 20px;">
+                                    <p style="margin: 0 0 6px 0;">Xin chào,</p>
+                                    <p style="margin: 0;">Đây là email cập nhật chương trình giảm giá mới dành cho khách hàng đã đăng ký nhận tin từ XuThi Store.</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 6px 20px 0 20px;">
+                                    <h2 style="margin: 0; font-size: 18px; line-height: 24px; color: #111827; font-weight: 600;">{{campaign.CampaignName}}</h2>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 6px 20px 0 20px; color: #6b7280; font-size: 12px; line-height: 17px; text-transform: uppercase; letter-spacing: 0.8px;">
+                                    {{typeLabel}}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 6px 20px 0 20px; color: #374151; font-size: 14px; line-height: 20px;">
+                                    Thời gian áp dụng: <strong style="color: #111827; font-weight: 600;">{{dateRange}}</strong>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 6px 20px 0 20px; color: #374151; font-size: 14px; line-height: 20px;">
+                                    Số lượng sản phẩm tham gia: <strong style="color: #111827; font-weight: 600;">{{campaign.ItemCount}}</strong>
+                                </td>
+                            </tr>
                             {{bannerSection}}
-                            <!-- Content -->
                             <tr>
-                                <td style="background-color: #ffffff; padding: 40px;">
-                                    <p style="margin: 0 0 4px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: #999; font-weight: 600;">{{typeLabel}}</p>
-                                    <h2 style="margin: 0 0 20px 0; font-size: 24px; color: #111; font-weight: 700;">{{campaign.CampaignName}}</h2>
-                                    
-                                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; margin: 0 0 24px 0;">
-                                        <tr>
-                                            <td style="padding: 16px 20px;">
-                                                <p style="margin: 0 0 4px 0; color: #555; font-size: 14px;">Thời gian: <strong style="color: #111;">{{dateRange}}</strong></p>
-                                                <p style="margin: 0; color: #555; font-size: 14px;"><strong style="color: #111;">{{campaign.ItemCount}}</strong> sản phẩm được giảm giá</p>
-                                            </td>
-                                        </tr>
-                                    </table>
-
-                                    <p style="margin: 0 0 24px 0; color: #555; font-size: 15px;">Đừng bỏ lỡ cơ hội mua sắm với giá ưu đãi tại XuThi Store!</p>
-                                    <div style="text-align: center;">
-                                        <a href="{{campaignLink}}" style="display: inline-block; background-color: #000000; color: #ffffff !important; padding: 14px 36px; text-decoration: none; font-weight: 600; font-size: 15px; letter-spacing: 0.5px;">Mua sắm ngay</a>
-                                    </div>
+                                <td style="padding: 6px 20px 0 20px; color: #374151; font-size: 14px; line-height: 20px;">
+                                    <p style="margin: 0;">Bạn có thể xem chi tiết chương trình tại đường dẫn bên dưới.</p>
                                 </td>
                             </tr>
-                            <!-- Footer -->
                             <tr>
-                                <td style="background-color: #fafafa; border-top: 1px solid #eee; padding: 24px 40px; text-align: center;">
-                                    <p style="margin: 0 0 4px 0; color: #999; font-size: 12px;">XuThi Store</p>
-                                    <p style="margin: 0; color: #999; font-size: 12px;">Bạn nhận email này vì đã đăng ký nhận thông tin khuyến mãi.</p>
+                                <td style="padding: 6px 20px 14px 20px;">
+                                    <a href="{{campaignLink}}" style="display: inline-block; background-color: #111827; color: #ffffff !important; padding: 9px 14px; text-decoration: none; font-weight: 600; font-size: 13px; line-height: 18px; border-radius: 4px;">Xem chi tiết chương trình</a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="background-color: #f9fafb; border-top: 1px solid #e5e7eb; padding: 10px 20px; color: #6b7280; font-size: 12px; line-height: 17px;">
+                                    <p style="margin: 0;">Bạn nhận email này vì đã đăng ký nhận email marketing từ XuThi Store.</p>
+                                    <p style="margin: 6px 0 0 0;">Để hủy đăng ký, dùng tùy chọn <strong>Unsubscribe</strong> trong ứng dụng email hoặc trả lời email này với tiêu đề <strong>unsubscribe</strong>.</p>
                                 </td>
                             </tr>
                         </table>
@@ -150,6 +146,42 @@ internal class NewSaleCampaignNotificationHandler(
             </table>
         </body>
         </html>
+        """;
+    }
+
+    private static string BuildSaleCampaignText(SaleCampaignCreatedEvent campaign)
+    {
+        var campaignLink = campaign.Slug is not null
+            ? $"https://xuthi.com/sale/{campaign.Slug}"
+            : "https://xuthi.com";
+
+        var typeLabel = campaign.Type switch
+        {
+            SaleCampaignType.FlashSale => "Flash Sale",
+            SaleCampaignType.SeasonalSale => "Khuyen mai theo mua",
+            SaleCampaignType.Clearance => "Xa hang",
+            SaleCampaignType.MemberExclusive => "Uu dai thanh vien",
+            _ => "Khuyen mai"
+        };
+
+        var dateRange = $"{campaign.StartDate:dd/MM/yyyy} - {campaign.EndDate:dd/MM/yyyy}";
+
+        return $"""
+        Cập nhật chương trình giảm giá
+
+        Xin chào,
+
+        XuThi Store vừa cập nhật chương trình giảm giá mới cho khách hàng đã đăng ký nhận tin.
+
+        Tên chương trình: {campaign.CampaignName}
+        Loại chương trình: {typeLabel}
+        Thời gian áp dụng: {dateRange}
+        Số lượng sản phẩm tham gia: {campaign.ItemCount}
+
+        Xem chi tiết tại: {campaignLink}
+
+        Bạn nhận email này vì đã đăng ký nhận email marketing từ XuThi Store.
+        Để hủy đăng ký, dùng tùy chọn Unsubscribe trong ứng dụng email hoặc trả lời email này với tiêu đề: unsubscribe.
         """;
     }
 }

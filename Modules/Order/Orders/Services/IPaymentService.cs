@@ -1,5 +1,7 @@
 namespace Order.Orders.Services;
 
+using PayOS.Models.Webhooks;
+
 public interface IPaymentService
 {
     /// <summary>
@@ -12,9 +14,9 @@ public interface IPaymentService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Handle incoming webhook payload from PayOS. Returns the order code and whether payment succeeded.
+    /// Verify and handle incoming webhook payload from PayOS. Returns the order code and whether payment succeeded.
     /// </summary>
-    Task<WebhookResult> HandleWebhookAsync(string webhookBody, string signature, CancellationToken ct = default);
+    Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default);
 }
 
 public record PaymentLinkResult(string CheckoutUrl, long OrderCode);

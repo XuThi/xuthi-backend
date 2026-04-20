@@ -11,10 +11,23 @@ public class CreateProductEndpoint : ICarterModule
     public void AddRoutes(IEndpointRouteBuilder app)
     {
         app.MapPost("/api/products", async (
+            HttpRequest httpRequest,
             [FromForm(Name = "data")] string? data,
             [FromForm(Name = "images")] List<IFormFile>? images,
             ISender sender) =>
         {
+            if (string.IsNullOrWhiteSpace(data) && httpRequest.HasFormContentType)
+            {
+                var form = await httpRequest.ReadFormAsync();
+                data = form["data"].FirstOrDefault();
+            }
+
+            if ((images is null || images.Count == 0) && httpRequest.HasFormContentType)
+            {
+                var form = await httpRequest.ReadFormAsync();
+                images = form.Files.GetFiles("images").ToList();
+            }
+
             CreateProductRequest? request = null;
 
             if (!string.IsNullOrWhiteSpace(data))

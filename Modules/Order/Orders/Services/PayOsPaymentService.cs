@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
 using PayOS;
 using PayOS.Models.V2.PaymentRequests;
 using PayOS.Models.Webhooks;
@@ -9,20 +8,19 @@ namespace Order.Orders.Services;
 public class PayOsPaymentService : IPaymentService
 {
     private readonly PayOSClient _client;
-    private readonly ILogger<PayOsPaymentService> _logger;
 
-    public PayOsPaymentService(
-        IConfiguration configuration,
-        ILogger<PayOsPaymentService> logger)
+    public PayOsPaymentService(IConfiguration configuration)
     {
-        _logger = logger;
+        var clientId = configuration["PayOS:ClientId"];
+        var apiKey = configuration["PayOS:ApiKey"];
+        var checksumKey = configuration["PayOS:ChecksumKey"];
 
-        var clientId = configuration["PayOS:ClientId"]
-            ?? throw new InvalidOperationException("PayOS:ClientId is not configured");
-        var apiKey = configuration["PayOS:ApiKey"]
-            ?? throw new InvalidOperationException("PayOS:ApiKey is not configured");
-        var checksumKey = configuration["PayOS:ChecksumKey"]
-            ?? throw new InvalidOperationException("PayOS:ChecksumKey is not configured");
+        if (string.IsNullOrWhiteSpace(clientId))
+            throw new InvalidOperationException("PayOS:ClientId is not configured");
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InvalidOperationException("PayOS:ApiKey is not configured");
+        if (string.IsNullOrWhiteSpace(checksumKey))
+            throw new InvalidOperationException("PayOS:ChecksumKey is not configured");
 
         _client = new PayOSClient(clientId, apiKey, checksumKey);
     }
@@ -61,39 +59,20 @@ public class PayOsPaymentService : IPaymentService
 
         var result = await _client.PaymentRequests.CreateAsync(request);
 
-        _logger.LogInformation(
-            "Created PayOS payment link for order {OrderNumber} (code={OrderCode}): {Url}",
-            order.OrderNumber, orderCode, result.CheckoutUrl);
-
         return new PaymentLinkResult(result.CheckoutUrl, orderCode);
     }
 
-    public async Task<WebhookResult> HandleWebhookAsync(
-        string webhookBody, string signature, CancellationToken ct = default)
+    public async Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default)
     {
-        try
+        if (webhookPayload?.Data is null || string.IsNullOrWhiteSpace(webhookPayload.Signature))
         {
-            // Parse the webhook body
-            var webhook = System.Text.Json.JsonSerializer.Deserialize<Webhook>(
-                webhookBody,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                ?? throw new InvalidOperationException("Invalid webhook payload");
-
-            var verified = await _client.Webhooks.VerifyAsync(webhook);
-
-            _logger.LogInformation(
-                "PayOS webhook verified: OrderCode={OrderCode}, Code={Code}",
-                verified.OrderCode, verified.Code);
-
-            var isSuccess = verified.Code == "00";
-
-            return new WebhookResult(verified.OrderCode, isSuccess, isSuccess ? "PAID" : "FAILED");
+            throw new InvalidOperationException("Invalid webhook payload");
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to verify PayOS webhook");
-            throw;
-        }
+
+        var verified = await _client.Webhooks.VerifyAsync(webhookPayload);
+        var isSuccess = verified.Code == "00";
+
+        return new WebhookResult(verified.OrderCode, isSuccess, isSuccess ? "PAID" : "FAILED");
     }
 
     /// <summary>
