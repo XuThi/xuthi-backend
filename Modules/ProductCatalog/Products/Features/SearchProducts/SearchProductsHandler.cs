@@ -12,6 +12,8 @@ public record SearchProductsRequest(
     Guid? BrandId = null,
     decimal? MinPrice = null,
     decimal? MaxPrice = null,
+    string? Colors = null,
+    string? Sizes = null,
     bool? IsActive = null,
     string? SortBy = null,
     bool SortDescending = false,
@@ -70,6 +72,8 @@ internal class SearchProductsHandler(
     : IQueryHandler<SearchProductsQuery, SearchProductsResult>
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+    private static readonly string[] ColorOptionKeys = ["color", "colour", "mau", "mau-sac", "mausac"];
+    private static readonly string[] SizeOptionKeys = ["size", "kich-co", "kichco", "co-giay", "cogiay"];
 
     public async Task<SearchProductsResult> Handle(SearchProductsQuery request, CancellationToken cancellationToken)
     {
@@ -167,6 +171,9 @@ internal class SearchProductsHandler(
 
     private static IQueryable<Product> ApplyFilters(IQueryable<Product> query, SearchProductsRequest req)
     {
+        var colorValues = ParseCsv(req.Colors);
+        var sizeValues = ParseCsv(req.Sizes);
+
         // Text search on name and description
         if (!string.IsNullOrWhiteSpace(req.Query))
         {
@@ -199,18 +206,49 @@ internal class SearchProductsHandler(
         // Exclude deleted products
         query = query.Where(p => !p.IsDeleted);
 
-        // Filter by price range (based on variant prices)
-        if (req.MinPrice.HasValue)
+        // Filter by price range: at least one variant must satisfy the full range.
+        if (req.MinPrice.HasValue || req.MaxPrice.HasValue)
         {
-            query = query.Where(p => p.Variants.Any(v => !v.IsDeleted && v.Price >= req.MinPrice.Value));
+            var minPrice = req.MinPrice;
+            var maxPrice = req.MaxPrice;
+
+            query = query.Where(p => p.Variants.Any(v =>
+                !v.IsDeleted &&
+                (!minPrice.HasValue || v.Price >= minPrice.Value) &&
+                (!maxPrice.HasValue || v.Price <= maxPrice.Value)));
         }
 
-        if (req.MaxPrice.HasValue)
+        if (colorValues.Length > 0)
         {
-            query = query.Where(p => p.Variants.Any(v => !v.IsDeleted && v.Price <= req.MaxPrice.Value));
+            query = query.Where(p => p.Variants.Any(v =>
+                !v.IsDeleted &&
+                v.OptionSelections.Any(os =>
+                    ColorOptionKeys.Contains(os.VariantOptionId.ToLower()) &&
+                    colorValues.Contains(os.Value.ToLower()))));
+        }
+
+        if (sizeValues.Length > 0)
+        {
+            query = query.Where(p => p.Variants.Any(v =>
+                !v.IsDeleted &&
+                v.OptionSelections.Any(os =>
+                    SizeOptionKeys.Contains(os.VariantOptionId.ToLower()) &&
+                    sizeValues.Contains(os.Value.ToLower()))));
         }
 
         return query;
+    }
+
+    private static string[] ParseCsv(string? rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+            return [];
+
+        return rawValue
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(value => value.ToLowerInvariant())
+            .Distinct()
+            .ToArray();
     }
 
     private static IQueryable<Product> ApplySorting(IQueryable<Product> query, string? sortBy, bool descending)
@@ -245,6 +283,8 @@ internal class SearchProductsHandler(
             $"brand={req.BrandId}",
             $"min={req.MinPrice}",
             $"max={req.MaxPrice}",
+            $"colors={req.Colors}",
+            $"sizes={req.Sizes}",
             $"active={req.IsActive}",
             $"sort={req.SortBy}",
             $"desc={req.SortDescending}",
