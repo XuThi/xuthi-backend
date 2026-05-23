@@ -1,6 +1,8 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.RemoveFromCart;
 
 // Command and Result
@@ -18,7 +20,7 @@ public class RemoveFromCartCommandValidator : AbstractValidator<RemoveFromCartCo
 }
 
 // Handler
-internal class RemoveFromCartHandler(CartDbContext db)
+internal class RemoveFromCartHandler(CartDbContext db, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<RemoveFromCartCommand, RemoveFromCartResult>
 {
     public async Task<RemoveFromCartResult> Handle(RemoveFromCartCommand cmd, CancellationToken ct)
@@ -36,6 +38,9 @@ internal class RemoveFromCartHandler(CartDbContext db)
             cart.Items.Remove(item);
             cart.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+
+            // Invalidate cart cache
+            cacheInvalidator.Invalidate(CacheKeys.Cart);
         }
 
         return new RemoveFromCartResult(true, MapToDto(cart));

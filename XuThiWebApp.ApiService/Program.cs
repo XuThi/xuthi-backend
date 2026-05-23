@@ -1,4 +1,5 @@
 using Cart;
+using Microsoft.AspNetCore.HttpOverrides;
 using Cart.Data;
 using Carter;
 using Core.Caching;
@@ -38,6 +39,9 @@ builder.Services.AddExceptionHandler<CustomExceptionHandler>();
 // Add in-memory cache for read-heavy endpoints (products, categories, brands, campaigns)
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ICacheInvalidator, MemoryCacheInvalidator>();
+
+// Add HttpClient for outgoing webhooks (e.g. frontend cache revalidation)
+builder.Services.AddHttpClient();
 
 // Add CORS for frontend
 builder.Services.AddCors(options =>
@@ -188,6 +192,13 @@ var app = builder.Build();
 
 // Configure the HTTP request pipeline.
 app.UseExceptionHandler();
+
+// Trust X-Forwarded-Proto from Azure App Service reverse proxy.
+// This ensures OAuth redirect URIs are built with https:// not http://,
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+});
 
 // Enable CORS
 app.UseCors("AllowFrontend");

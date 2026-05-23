@@ -3,6 +3,8 @@ using Cart.ShoppingCarts.Models;
 using ProductCatalog.Data;
 using Promotion.Data;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.AddItemIntoCart;
 
 public record AddToCartCommand(string? SessionId, Guid? CustomerId, Guid ProductId, Guid VariantId, int Quantity = 1) : ICommand<AddToCartResult>;
@@ -11,7 +13,11 @@ public record AddToCartResult(Guid CartId, CartDto Cart);
 /// <summary>
 /// Add item to cart. Creates cart if doesn't exist.
 /// </summary>
-internal class AddToCartHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb, PromotionDbContext promotionDb)
+internal class AddToCartHandler(
+    CartDbContext cartDb,
+    ProductCatalogDbContext catalogDb,
+    PromotionDbContext promotionDb,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<AddToCartCommand, AddToCartResult>
 {
     public async Task<AddToCartResult> Handle(AddToCartCommand cmd, CancellationToken ct)
@@ -108,6 +114,9 @@ internal class AddToCartHandler(CartDbContext cartDb, ProductCatalogDbContext ca
 
         cart.UpdatedAt = DateTime.UtcNow;
         await cartDb.SaveChangesAsync(ct);
+
+        // Invalidate cart cache
+        cacheInvalidator.Invalidate(CacheKeys.Cart);
 
         return new AddToCartResult(cart.Id, MapToDto(cart));
     }

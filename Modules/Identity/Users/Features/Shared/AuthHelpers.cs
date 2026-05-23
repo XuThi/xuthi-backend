@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Identity.Users.Models;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Identity.Users.Features.Shared;
@@ -42,6 +43,20 @@ public static class AuthHelpers
 
     public static string GetFrontendUrl(HttpContext context)
     {
+        var config = context.RequestServices.GetService<IConfiguration>();
+        var configuredUrl = config?["FrontendUrl"];
+        if (!string.IsNullOrEmpty(configuredUrl))
+        {
+            return configuredUrl;
+        }
+
+        var origin = context.Request.Headers["Origin"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(origin))
+        {
+            var uri = new Uri(origin);
+            return $"{uri.Scheme}://{uri.Authority}";
+        }
+
         var referer = context.Request.Headers["Referer"].FirstOrDefault();
         if (!string.IsNullOrEmpty(referer))
         {

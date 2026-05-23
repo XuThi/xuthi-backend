@@ -11,6 +11,7 @@ public static class CacheKeys
     public const string Brands = "brands";
     public const string SaleCampaigns = "sale-campaigns";
     public const string ActiveSaleItems = "active-sale-items";
+    public const string Cart = "cart";
 
     /// <summary>
     /// Build a composite cache key from a prefix and segments.

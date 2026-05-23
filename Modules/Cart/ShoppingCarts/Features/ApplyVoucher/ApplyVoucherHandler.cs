@@ -2,6 +2,8 @@ using Cart.Data;
 using Cart.ShoppingCarts.Models;
 using Promotion.Vouchers.Features.ValidateVoucher;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.ApplyVoucher;
 
 // Command and Result
@@ -19,7 +21,7 @@ public class ApplyVoucherCommandValidator : AbstractValidator<ApplyVoucherComman
 }
 
 // Handler
-internal class ApplyVoucherHandler(CartDbContext cartDb, ISender sender)
+internal class ApplyVoucherHandler(CartDbContext cartDb, ISender sender, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<ApplyVoucherCommand, ApplyVoucherResult>
 {
     public async Task<ApplyVoucherResult> Handle(ApplyVoucherCommand cmd, CancellationToken ct)
@@ -55,6 +57,9 @@ internal class ApplyVoucherHandler(CartDbContext cartDb, ISender sender)
         cart.UpdatedAt = DateTime.UtcNow;
 
         await cartDb.SaveChangesAsync(ct);
+
+        // Invalidate cart cache
+        cacheInvalidator.Invalidate(CacheKeys.Cart);
 
         return new ApplyVoucherResult(true, null, validateResult.DiscountAmount, MapToDto(cart));
     }

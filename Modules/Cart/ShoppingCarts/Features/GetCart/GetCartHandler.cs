@@ -1,5 +1,7 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
+using Microsoft.Extensions.Caching.Memory;
+using Core.Caching;
 
 namespace Cart.ShoppingCarts.Features.GetCart;
 
@@ -16,13 +18,20 @@ public class GetCartQueryValidator : AbstractValidator<GetCartQuery>
 }
 
 /// <summary>
-/// Get cart by session ID, customer ID, or cart ID.
+/// Get cart by session ID, customer ID, or cart ID with in-memory caching.
 /// </summary>
-internal class GetCartHandler(CartDbContext db)
+internal class GetCartHandler(CartDbContext db, IMemoryCache cache, ICacheInvalidator cacheInvalidator)
     : IQueryHandler<GetCartQuery, GetCartResult>
 {
     public async Task<GetCartResult> Handle(GetCartQuery query, CancellationToken ct)
     {
+        var cacheKey = BuildCacheKey(query);
+        
+        if (cache.TryGetValue(cacheKey, out GetCartResult? cachedResult))
+        {
+            return cachedResult!;
+        }
+
         ShoppingCart? cart = null;
 
         if (query.CartId.HasValue)
@@ -45,10 +54,23 @@ internal class GetCartHandler(CartDbContext db)
                 .FirstOrDefaultAsync(c => c.SessionId == query.SessionId, ct);
         }
 
-        if (cart is null)
-            return new GetCartResult(null);
+        var result = new GetCartResult(cart is null ? null : MapToDto(cart));
 
-        return new GetCartResult(MapToDto(cart));
+        // Cache for 5 minutes, track key for invalidation
+        var cacheOptions = new MemoryCacheEntryOptions()
+            .SetAbsoluteExpiration(TimeSpan.FromMinutes(5));
+        
+        cache.Set(cacheKey, result, cacheOptions);
+        cacheInvalidator.TrackKey(cacheKey);
+
+        return result;
+    }
+
+    private static string BuildCacheKey(GetCartQuery query)
+    {
+        if (query.CartId.HasValue) return CacheKeys.Build(CacheKeys.Cart, $"id={query.CartId}");
+        if (query.CustomerId.HasValue) return CacheKeys.Build(CacheKeys.Cart, $"customer={query.CustomerId}");
+        return CacheKeys.Build(CacheKeys.Cart, $"session={query.SessionId}");
     }
 
     private static CartDto MapToDto(ShoppingCart cart) => new(

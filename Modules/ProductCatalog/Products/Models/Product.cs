@@ -10,11 +10,15 @@ public class Product : Aggregate<Guid>
     public Guid BrandId { get; set; }
     public bool IsActive { get; set; } = true;
     public bool IsDeleted { get; set; }
+    public bool IsFeatured { get; set; }
     public Guid CategoryId { get; set; }
+    public decimal AverageRating { get; set; }
+    public int ReviewCount { get; set; }
 
     public Brand Brand { get; set; } = null!;
     public Category Category { get; set; } = null!;
     public List<Variant> Variants { get; set; } = [];
     public List<ProductImage> Images { get; set; } = [];
     public List<ProductVariantOption> VariantOptions { get; set; } = [];
+    public List<ProductReview> Reviews { get; set; } = [];
 }

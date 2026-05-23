@@ -3,6 +3,8 @@ using Cart.ShoppingCarts.Models;
 using ProductCatalog.Data;
 using Promotion.Data;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.UpdateCartItem;
 
 public record UpdateCartItemCommand(Guid CartId, Guid VariantId, int Quantity) : ICommand<UpdateCartItemResult>;
@@ -11,7 +13,11 @@ public record UpdateCartItemResult(bool Success, CartDto? Cart, string? ErrorMes
 /// <summary>
 /// Update cart item quantity
 /// </summary>
-internal class UpdateCartItemHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb, PromotionDbContext promotionDb)
+internal class UpdateCartItemHandler(
+    CartDbContext cartDb,
+    ProductCatalogDbContext catalogDb,
+    PromotionDbContext promotionDb,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateCartItemCommand, UpdateCartItemResult>
 {
     public async Task<UpdateCartItemResult> Handle(UpdateCartItemCommand cmd, CancellationToken ct)
@@ -55,6 +61,9 @@ internal class UpdateCartItemHandler(CartDbContext cartDb, ProductCatalogDbConte
 
         cart.UpdatedAt = DateTime.UtcNow;
         await cartDb.SaveChangesAsync(ct);
+
+        // Invalidate cart cache
+        cacheInvalidator.Invalidate(CacheKeys.Cart);
 
         return new UpdateCartItemResult(true, MapToDto(cart), null);
     }

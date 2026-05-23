@@ -1,6 +1,8 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.MergeCarts;
 
 public record MergeCartsCommand(string SessionId, Guid CustomerId) : ICommand<MergeCartsResult>;
@@ -15,7 +17,7 @@ public class MergeCartsCommandValidator : AbstractValidator<MergeCartsCommand>
     }
 }
 
-internal class MergeCartsHandler(CartDbContext db)
+internal class MergeCartsHandler(CartDbContext db, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<MergeCartsCommand, MergeCartsResult>
 {
     public async Task<MergeCartsResult> Handle(MergeCartsCommand cmd, CancellationToken ct)
@@ -38,6 +40,10 @@ internal class MergeCartsHandler(CartDbContext db)
             anonymousCart.SessionId = null;
             anonymousCart.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+
+            // Invalidate cart cache
+            cacheInvalidator.Invalidate(CacheKeys.Cart);
+
             return new MergeCartsResult(true, MapToDto(anonymousCart));
         }
 
@@ -73,6 +79,9 @@ internal class MergeCartsHandler(CartDbContext db)
         db.ShoppingCarts.Remove(anonymousCart);
 
         await db.SaveChangesAsync(ct);
+
+        // Invalidate cart cache
+        cacheInvalidator.Invalidate(CacheKeys.Cart);
 
         return new MergeCartsResult(true, MapToDto(customerCart));
     }

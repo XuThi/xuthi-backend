@@ -1,5 +1,7 @@
 using Cart.Data;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.ClearCart;
 
 // Command and Result
@@ -16,7 +18,7 @@ public class ClearCartCommandValidator : AbstractValidator<ClearCartCommand>
 }
 
 // Handler
-internal class ClearCartHandler(CartDbContext db)
+internal class ClearCartHandler(CartDbContext db, ICacheInvalidator cacheInvalidator)
     : ICommandHandler<ClearCartCommand, ClearCartResult>
 {
     public async Task<ClearCartResult> Handle(ClearCartCommand cmd, CancellationToken ct)
@@ -35,6 +37,10 @@ internal class ClearCartHandler(CartDbContext db)
         cart.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);
+
+        // Invalidate cart cache
+        cacheInvalidator.Invalidate(CacheKeys.Cart);
+
         return new ClearCartResult(true);
     }
 }

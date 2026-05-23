@@ -15,6 +15,7 @@ public record SearchProductsRequest(
     string? Colors = null,
     string? Sizes = null,
     bool? IsActive = null,
+    bool? IsFeatured = null,
     string? SortBy = null,
     bool SortDescending = false,
     int Page = 1,
@@ -46,6 +47,9 @@ public record ProductSearchItem(
     Guid? BrandId,
     string? BrandName,
     bool IsActive,
+    bool IsFeatured,
+    decimal AverageRating,
+    int ReviewCount,
     List<ProductVariantItem> Variants,
     DateTime? CreatedAt,
     DateTime? UpdatedAt
@@ -142,6 +146,9 @@ internal class SearchProductsHandler(
             BrandId: p.BrandId,
             BrandName: p.Brand?.Name,
             IsActive: p.IsActive,
+            IsFeatured: p.IsFeatured,
+            AverageRating: p.AverageRating,
+            ReviewCount: p.ReviewCount,
             Variants: p.Variants
                 .Where(v => !v.IsDeleted)
                 .Select(v => new ProductVariantItem(
@@ -203,6 +210,12 @@ internal class SearchProductsHandler(
             query = query.Where(p => p.IsActive == req.IsActive.Value);
         }
 
+        // Filter by featured status
+        if (req.IsFeatured.HasValue)
+        {
+            query = query.Where(p => p.IsFeatured == req.IsFeatured.Value);
+        }
+
         // Exclude deleted products
         query = query.Where(p => !p.IsDeleted);
 
@@ -214,6 +227,7 @@ internal class SearchProductsHandler(
 
             query = query.Where(p => p.Variants.Any(v =>
                 !v.IsDeleted &&
+                v.StockQuantity > 0 &&
                 (!minPrice.HasValue || v.Price >= minPrice.Value) &&
                 (!maxPrice.HasValue || v.Price <= maxPrice.Value)));
         }
@@ -222,6 +236,7 @@ internal class SearchProductsHandler(
         {
             query = query.Where(p => p.Variants.Any(v =>
                 !v.IsDeleted &&
+                v.StockQuantity > 0 &&
                 v.OptionSelections.Any(os =>
                     ColorOptionKeys.Contains(os.VariantOptionId.ToLower()) &&
                     colorValues.Contains(os.Value.ToLower()))));
@@ -231,6 +246,7 @@ internal class SearchProductsHandler(
         {
             query = query.Where(p => p.Variants.Any(v =>
                 !v.IsDeleted &&
+                v.StockQuantity > 0 &&
                 v.OptionSelections.Any(os =>
                     SizeOptionKeys.Contains(os.VariantOptionId.ToLower()) &&
                     sizeValues.Contains(os.Value.ToLower()))));
@@ -286,6 +302,7 @@ internal class SearchProductsHandler(
             $"colors={req.Colors}",
             $"sizes={req.Sizes}",
             $"active={req.IsActive}",
+            $"featured={req.IsFeatured}",
             $"sort={req.SortBy}",
             $"desc={req.SortDescending}",
             $"p={req.Page}",

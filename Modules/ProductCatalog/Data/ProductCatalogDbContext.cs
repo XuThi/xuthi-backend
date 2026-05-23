@@ -28,6 +28,7 @@ public class ProductCatalogDbContext(
     public DbSet<VariantOptionSelection> VariantOptionSelections => Set<VariantOptionSelection>();
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
     public DbSet<OrderItemProductReference> OrderItemProductReferences => Set<OrderItemProductReference>();
+    public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -49,6 +50,8 @@ public class ProductCatalogDbContext(
             e.HasMany(p => p.Variants).WithOne().HasForeignKey(v => v.ProductId);
             e.HasMany(p => p.Images).WithOne().HasForeignKey(pi => pi.ProductId);
             e.HasMany(p => p.VariantOptions).WithOne().HasForeignKey(pvo => pvo.ProductId);
+            e.HasMany(p => p.Reviews).WithOne(r => r.Product).HasForeignKey(r => r.ProductId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(p => p.AverageRating).HasPrecision(3, 2);
             // Ignore DDD base class audit fields not used in this module yet
             e.Ignore(p => p.CreatedBy);
             e.Ignore(p => p.UpdatedBy);
@@ -184,6 +187,20 @@ public class ProductCatalogDbContext(
             e.HasIndex(r => new { r.SessionKey, r.Status });
             e.HasIndex(r => new { r.Status, r.ExpiresAt }); // for cleanup query
             e.Property(r => r.Status).HasConversion<string>();
+            e.Ignore(r => r.CreatedBy);
+            e.Ignore(r => r.UpdatedBy);
+            e.Property(r => r.CreatedAt).HasColumnName("CreatedAt");
+            e.Property(r => r.UpdatedAt).HasColumnName("UpdatedAt");
+        });
+
+        // ProductReview
+        modelBuilder.Entity<ProductReview>(e =>
+        {
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => r.ProductId); // Efficient lookup by product
+            e.Property(r => r.AuthorName).HasMaxLength(150);
+            e.Property(r => r.AuthorEmail).HasMaxLength(254);
+            e.Property(r => r.Comment).HasMaxLength(2000);
             e.Ignore(r => r.CreatedBy);
             e.Ignore(r => r.UpdatedBy);
             e.Property(r => r.CreatedAt).HasColumnName("CreatedAt");

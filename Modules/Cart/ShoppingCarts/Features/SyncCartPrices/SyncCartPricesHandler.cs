@@ -3,6 +3,8 @@ using Cart.ShoppingCarts.Models;
 using ProductCatalog.Data;
 using Promotion.Data;
 
+using Core.Caching;
+
 namespace Cart.ShoppingCarts.Features.SyncCartPrices;
 
 // Command and Result
@@ -19,7 +21,11 @@ public class SyncCartPricesCommandValidator : AbstractValidator<SyncCartPricesCo
 }
 
 // Handler
-internal class SyncCartPricesHandler(CartDbContext cartDb, ProductCatalogDbContext catalogDb, PromotionDbContext promotionDb)
+internal class SyncCartPricesHandler(
+    CartDbContext cartDb,
+    ProductCatalogDbContext catalogDb,
+    PromotionDbContext promotionDb,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<SyncCartPricesCommand, SyncCartPricesResult>
 {
     public async Task<SyncCartPricesResult> Handle(SyncCartPricesCommand cmd, CancellationToken ct)
@@ -67,6 +73,9 @@ internal class SyncCartPricesHandler(CartDbContext cartDb, ProductCatalogDbConte
 
         cart.UpdatedAt = DateTime.UtcNow;
         await cartDb.SaveChangesAsync(ct);
+
+        // Invalidate cart cache
+        cacheInvalidator.Invalidate(CacheKeys.Cart);
 
         return new SyncCartPricesResult(true, MapToDto(cart), warnings.Count > 0 ? warnings : null);
     }

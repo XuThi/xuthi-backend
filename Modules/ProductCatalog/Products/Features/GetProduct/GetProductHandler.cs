@@ -17,6 +17,9 @@ public record ProductDetailResult(
     Guid? BrandId,
     string? BrandName,
     bool IsActive,
+    bool IsFeatured,
+    decimal AverageRating,
+    int ReviewCount,
     List<ProductVariantResult> Variants,
     DateTime? CreatedAt,
     DateTime? UpdatedAt
@@ -105,6 +108,9 @@ internal class GetProductHandler(ProductCatalogDbContext dbContext)
             BrandId: product.BrandId,
             BrandName: product.Brand?.Name,
             IsActive: product.IsActive,
+            IsFeatured: product.IsFeatured,
+            AverageRating: product.AverageRating,
+            ReviewCount: product.ReviewCount,
             Variants: variants,
             CreatedAt: product.CreatedAt,
             UpdatedAt: product.UpdatedAt
