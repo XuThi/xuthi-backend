@@ -14,4 +14,8 @@ public class ProductInfo
     public List<DimensionInfo> Dimensions { get; set; } = [];
     public List<GroupInfo> Groups { get; set; } = [];
     public List<ProductImageInfo> Images { get; set; } = [];
+    public int WeightGrams { get; set; }
+    public int LengthCm { get; set; }
+    public int WidthCm { get; set; }
+    public int HeightCm { get; set; }
 }

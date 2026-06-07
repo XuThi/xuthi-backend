@@ -14,6 +14,10 @@ public class Product : Aggregate<Guid>
     public Guid CategoryId { get; set; }
     public decimal AverageRating { get; set; }
     public int ReviewCount { get; set; }
+    public int WeightGrams { get; set; } = 1000;
+    public int LengthCm { get; set; } = 28;
+    public int WidthCm { get; set; } = 18;
+    public int HeightCm { get; set; } = 9;
 
     public Brand Brand { get; set; } = null!;
     public Category Category { get; set; } = null!;

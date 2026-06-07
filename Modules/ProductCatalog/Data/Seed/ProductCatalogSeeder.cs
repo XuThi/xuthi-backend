@@ -99,6 +99,10 @@ public static class ProductCatalogSeeder
                 CategoryId = CategoryId,
                 IsActive = true,
                 IsDeleted = false,
+                WeightGrams = 1000,
+                LengthCm = 28,
+                WidthCm = 18,
+                HeightCm = 9,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             };

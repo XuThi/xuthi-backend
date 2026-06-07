@@ -27,7 +27,8 @@ public record CheckoutRequest(
 
     // PayOS redirect URLs (required for PayOS payment)
     string? ReturnUrl = null,
-    string? CancelUrl = null
+    string? CancelUrl = null,
+    string? ShippingDistrict = null
 );
 public record CheckoutResponse(Guid OrderId, string OrderNumber, decimal Total, string Status, string? PaymentUrl = null);
 

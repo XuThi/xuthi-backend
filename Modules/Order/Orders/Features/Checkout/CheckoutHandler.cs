@@ -5,6 +5,7 @@ using ProductCatalog.Data;
 using ProductCatalog.Products.Services;
 using Promotion.Vouchers.Features.ValidateVoucher;
 using Promotion.Data;
+using Order.Orders.Features.GetShippingSettings;
 
 namespace Order.Orders.Features.Checkout;
 
@@ -159,8 +160,15 @@ internal class CheckoutHandler(
             }
         }
 
-        // 3. Calculate shipping (simplified - could be based on location)
-        decimal shippingFee = 30000; // 30k VND flat rate, adjust as needed
+        // 3. Calculate shipping based on dynamic settings
+        var shippingResult = await sender.Send(new CalculateShipping.CalculateShippingQuery(
+            req.PaymentMethod,
+            req.ShippingCity,
+            req.ShippingWard,
+            req.Items.Select(i => new CalculateShipping.CalculateShippingItem(i.ProductId, i.VariantId, i.Quantity)).ToList(),
+            req.ShippingDistrict
+        ), cancellationToken);
+        decimal shippingFee = shippingResult.ShippingFee;
 
         // 4. Create order
         var orderNumber = GenerateOrderNumber();
@@ -176,7 +184,9 @@ internal class CheckoutHandler(
             CustomerPhone = req.CustomerPhone,
             ShippingAddress = req.ShippingAddress,
             ShippingCity = req.ShippingCity,
-            ShippingWard = req.ShippingWard,
+            ShippingWard = !string.IsNullOrWhiteSpace(req.ShippingDistrict)
+                ? $"{req.ShippingDistrict}, {req.ShippingWard}"
+                : req.ShippingWard,
             ShippingNote = req.ShippingNote,
             Subtotal = subtotal,
             DiscountAmount = discountAmount,
