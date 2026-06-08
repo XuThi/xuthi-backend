@@ -41,7 +41,8 @@ public class SubmitReviewEndpoint : ICarterModule
                 AuthorEmail: body.AuthorEmail,
                 Rating: body.Rating,
                 Comment: body.Comment,
-                CustomerId: customerId
+                CustomerId: customerId,
+                CustomerEmail: principal.FindFirstValue(ClaimTypes.Email)
             );
             var result = await sender.Send(cmd);
             var response = result.Adapt<SubmitReviewResponse>();

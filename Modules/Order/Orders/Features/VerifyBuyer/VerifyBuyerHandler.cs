@@ -15,9 +15,14 @@ internal class VerifyBuyerHandler(OrderDbContext db)
 {
     public async Task<bool> Handle(VerifyBuyerQuery request, CancellationToken ct)
     {
+        var normalizedEmail = request.CustomerEmail?.Trim().ToLower();
+
         return await db.Orders
             .AsNoTracking()
-            .Where(o => o.CustomerId == request.CustomerId && o.Status == OrderStatus.Delivered)
+            .Where(o => o.Status == OrderStatus.Delivered)
+            .Where(o => o.CustomerId == request.CustomerId
+                || (!string.IsNullOrWhiteSpace(normalizedEmail)
+                    && o.CustomerEmail.ToLower() == normalizedEmail))
             .AnyAsync(o => o.Items.Any(i => i.ProductId == request.ProductId), ct);
     }
 }

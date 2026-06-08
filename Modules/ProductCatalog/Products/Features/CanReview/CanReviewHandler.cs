@@ -30,7 +30,8 @@ internal class CanReviewHandler(
             return new CanReviewResult(false);
 
         // 1. Verify that customer has a delivered order for this product via Order Module
-        var hasDeliveredOrder = await sender.Send(new VerifyBuyerQuery(customerId.Value, request.ProductId), ct);
+        var customerEmail = request.Principal.FindFirstValue(ClaimTypes.Email);
+        var hasDeliveredOrder = await sender.Send(new VerifyBuyerQuery(customerId.Value, request.ProductId, customerEmail), ct);
         if (!hasDeliveredOrder)
             return new CanReviewResult(false);
 

@@ -6,7 +6,7 @@ namespace Contracts;
 
 public record GetCustomerByExternalIdQuery(string ExternalUserId) : IRequest<Guid?>;
 
-public record VerifyBuyerQuery(Guid CustomerId, Guid ProductId) : IRequest<bool>;
+public record VerifyBuyerQuery(Guid CustomerId, Guid ProductId, string? CustomerEmail = null) : IRequest<bool>;
 
 public record GetDeliveredProductIdsQuery(Guid CustomerId) : IRequest<List<Guid>>;
 

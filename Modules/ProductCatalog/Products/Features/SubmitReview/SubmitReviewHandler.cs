@@ -21,7 +21,8 @@ public record SubmitReviewCommand(
     string AuthorEmail,
     int Rating,
     string? Comment,
-    Guid? CustomerId = null
+    Guid? CustomerId = null,
+    string? CustomerEmail = null
 ) : IRequest<SubmitReviewResult>;
 
 public record SubmitReviewResult(Guid ReviewId, decimal NewAverageRating, int NewReviewCount);
@@ -54,7 +55,7 @@ internal class SubmitReviewHandler(
         }
 
         // Verify that customer has a delivered order for this product via Order Module
-        var hasDeliveredOrder = await sender.Send(new VerifyBuyerQuery(cmd.CustomerId.Value, cmd.ProductId), ct);
+        var hasDeliveredOrder = await sender.Send(new VerifyBuyerQuery(cmd.CustomerId.Value, cmd.ProductId, cmd.CustomerEmail), ct);
 
         if (!hasDeliveredOrder)
         {
