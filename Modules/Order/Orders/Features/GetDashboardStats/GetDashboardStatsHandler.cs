@@ -46,22 +46,22 @@ internal class GetDashboardStatsHandler(
         var thisMonthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var nextMonthStart = thisMonthStart.AddMonths(1);
         var lastMonthStart = thisMonthStart.AddMonths(-1);
-
-        // 1. Calculate Revenue from completed, paid orders only.
-        var thisMonthRevenue = await orderDb.Orders
+        var completedRevenueOrders = orderDb.Orders
             .AsNoTracking()
-            .Where(o => o.CreatedAt >= thisMonthStart
-                && o.CreatedAt < nextMonthStart
-                && o.Status == OrderStatus.Delivered
-                && o.PaymentStatus == PaymentStatus.Paid)
+            .Where(o => o.Status == OrderStatus.Delivered
+                && (o.PaymentStatus == PaymentStatus.Paid
+                    || o.PaymentMethod == PaymentMethod.CashOnDelivery));
+
+        // 1. Calculate Revenue from completed orders by completion/payment date.
+        // Delivered COD orders are treated as revenue even for older rows whose PaymentStatus was not backfilled.
+        var thisMonthRevenue = await completedRevenueOrders
+            .Where(o => (o.DeliveredAt ?? o.PaidAt ?? o.CreatedAt) >= thisMonthStart
+                && (o.DeliveredAt ?? o.PaidAt ?? o.CreatedAt) < nextMonthStart)
             .SumAsync(o => (decimal?)o.Total, ct) ?? 0;
 
-        var lastMonthRevenue = await orderDb.Orders
-            .AsNoTracking()
-            .Where(o => o.CreatedAt >= lastMonthStart
-                && o.CreatedAt < thisMonthStart
-                && o.Status == OrderStatus.Delivered
-                && o.PaymentStatus == PaymentStatus.Paid)
+        var lastMonthRevenue = await completedRevenueOrders
+            .Where(o => (o.DeliveredAt ?? o.PaidAt ?? o.CreatedAt) >= lastMonthStart
+                && (o.DeliveredAt ?? o.PaidAt ?? o.CreatedAt) < thisMonthStart)
             .SumAsync(o => (decimal?)o.Total, ct) ?? 0;
 
         decimal revenueChange = 0;
@@ -140,12 +140,9 @@ internal class GetDashboardStatsHandler(
             var mEnd = mStart.AddMonths(1);
             var monthName = mStart.ToString("MM/yyyy");
 
-            var monthRevenue = await orderDb.Orders
-                .AsNoTracking()
-                .Where(o => o.CreatedAt >= mStart
-                    && o.CreatedAt < mEnd
-                    && o.Status == OrderStatus.Delivered
-                    && o.PaymentStatus == PaymentStatus.Paid)
+            var monthRevenue = await completedRevenueOrders
+                .Where(o => (o.DeliveredAt ?? o.PaidAt ?? o.CreatedAt) >= mStart
+                    && (o.DeliveredAt ?? o.PaidAt ?? o.CreatedAt) < mEnd)
                 .SumAsync(o => (decimal?)o.Total, ct) ?? 0;
 
             monthlyRevenue.Add(new MonthlyRevenueDto(monthName, monthRevenue));
