@@ -118,21 +118,23 @@ internal class CalculateShippingHandler(
                 }
 
                 int totalWeightGrams = 0;
-                int packageLength = 28;
-                int packageWidth = 18;
+                int packageLength = settings.PackageLengthCm;
+                int packageWidth = settings.PackageWidthCm;
                 int packageHeight = 0;
 
                 if (flatList.Count > 0)
                 {
-                    // First item: full weight
-                    totalWeightGrams = flatList[0].WeightGrams;
-                    packageLength = flatList[0].LengthCm;
-                    packageWidth = flatList[0].WidthCm;
-                    packageHeight = flatList[0].HeightCm;
+                    // Existing products created before the dimensions migration can have zero values.
+                    // GHN rejects packages with zero weight or dimensions, so normalize each product.
+                    var firstProduct = NormalizePackageDimensions(flatList[0], settings);
+                    totalWeightGrams = firstProduct.WeightGrams;
+                    packageLength = firstProduct.LengthCm;
+                    packageWidth = firstProduct.WidthCm;
+                    packageHeight = firstProduct.HeightCm;
 
                     for (int i = 1; i < flatList.Count; i++) // 0-indexed: index 1 is 2nd item, etc.
                     {
-                        var currentProduct = flatList[i];
+                        var currentProduct = NormalizePackageDimensions(flatList[i], settings);
                         int itemOrdinal = i + 1; // 1-based index (2nd item, 3rd, etc.)
                         
                         if (itemOrdinal % 2 == 0) // Even steps (2nd, 4th, 6th...)
@@ -157,6 +159,11 @@ internal class CalculateShippingHandler(
                     packageWidth = settings.PackageWidthCm;
                     packageHeight = settings.PackageHeightCm;
                 }
+
+                totalWeightGrams = Math.Max(totalWeightGrams, settings.PackageWeightGrams);
+                packageLength = Math.Max(packageLength, settings.PackageLengthCm);
+                packageWidth = Math.Max(packageWidth, settings.PackageWidthCm);
+                packageHeight = Math.Max(packageHeight, settings.PackageHeightCm);
 
                 // Resolve warehouse origin location dynamically from WarehouseCityName and WarehouseWardName
                 int fromDistrictId = settings.GhnFromDistrictId;
@@ -283,6 +290,24 @@ internal class CalculateShippingHandler(
 
         return null;
     }
+
+    private static PackageDimensions NormalizePackageDimensions(
+        ProductCatalog.Products.Models.Product product,
+        ShippingSettingsDto settings)
+    {
+        return new PackageDimensions(
+            WeightGrams: product.WeightGrams > 0 ? product.WeightGrams : settings.PackageWeightGrams,
+            LengthCm: product.LengthCm > 0 ? product.LengthCm : settings.PackageLengthCm,
+            WidthCm: product.WidthCm > 0 ? product.WidthCm : settings.PackageWidthCm,
+            HeightCm: product.HeightCm > 0 ? product.HeightCm : settings.PackageHeightCm
+        );
+    }
+
+    private readonly record struct PackageDimensions(
+        int WeightGrams,
+        int LengthCm,
+        int WidthCm,
+        int HeightCm);
 
     private async Task<(int DistrictId, string WardCode)?> ResolveInProvinceAsync(
         GhnProvince province,
