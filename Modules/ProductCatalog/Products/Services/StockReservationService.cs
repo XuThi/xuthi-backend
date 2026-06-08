@@ -141,6 +141,40 @@ public class StockReservationService(
         }
     }
 
+    public async Task RestoreConfirmedReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
+    {
+        var reservations = await db.StockReservations
+            .Where(r => r.SessionKey == sessionKey
+                && r.OrderId == orderId
+                && r.Status == StockReservationStatus.Confirmed)
+            .ToListAsync(ct);
+
+        if (reservations.Count == 0)
+            return;
+
+        var variantIds = reservations.Select(r => r.VariantId).Distinct().ToList();
+        var variants = await db.Variants
+            .Where(v => variantIds.Contains(v.Id))
+            .ToListAsync(ct);
+
+        foreach (var reservation in reservations)
+        {
+            var variant = variants.FirstOrDefault(v => v.Id == reservation.VariantId);
+            if (variant is not null)
+            {
+                variant.StockQuantity += reservation.Quantity;
+            }
+
+            reservation.Status = StockReservationStatus.Released;
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Restored stock for {Count} confirmed reservations from order {OrderId}",
+            reservations.Count, orderId);
+    }
+
     public async Task<int> CleanupExpiredReservationsAsync(CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;

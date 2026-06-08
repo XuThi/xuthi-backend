@@ -33,25 +33,26 @@ internal class CancelPendingPayOsOrderHandler(
         if (order is null)
             throw new KeyNotFoundException("Order not found");
 
-        if (order.PaymentMethod != PaymentMethod.PayOS)
-            throw new InvalidOperationException("Chỉ cho phép hủy đơn thanh toán chuyển khoản PayOS.");
-
         if (!IsOrderOwner(order, command.RequestUserId, command.RequestEmail))
-            throw new UnauthorizedAccessException("Bạn không có quyền hủy đơn hàng này.");
+            throw new UnauthorizedAccessException("Ban khong co quyen huy don hang nay.");
 
-        if (order.Status != OrderStatus.Pending || order.PaymentStatus != PaymentStatus.Pending)
-            throw new InvalidOperationException("Đơn hàng không còn ở trạng thái chờ thanh toán để hủy.");
+        if (order.Status != OrderStatus.Pending)
+            throw new InvalidOperationException("Chi co the huy don hang truoc khi shop xac nhan.");
+
+        if (order.PaymentMethod == PaymentMethod.PayOS && order.PaymentStatus != PaymentStatus.Pending)
+            throw new InvalidOperationException("Don hang PayOS khong con o trang thai cho thanh toan de huy.");
 
         order.Status = OrderStatus.Cancelled;
         order.PaymentStatus = PaymentStatus.Failed;
         order.CancelledAt = DateTime.UtcNow;
         order.CancellationReason = string.IsNullOrWhiteSpace(command.Reason)
-            ? "Khách hủy thanh toán PayOS"
+            ? "Khach huy don hang truoc khi xac nhan"
             : command.Reason;
 
         if (!string.IsNullOrEmpty(order.ReservationSessionKey))
         {
             await stockReservation.ReleaseReservationsAsync(order.ReservationSessionKey, cancellationToken);
+            await stockReservation.RestoreConfirmedReservationsAsync(order.ReservationSessionKey, order.Id, cancellationToken);
         }
 
         await orderDb.SaveChangesAsync(cancellationToken);

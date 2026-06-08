@@ -1,4 +1,3 @@
-using Customer.Customers.Features.AddCustomerOrder;
 using Order.Orders.Events;
 using Order.Orders.Services;
 using ProductCatalog.Data;
@@ -207,7 +206,8 @@ internal class CheckoutHandler(
             order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
         }
 
-        // 5. Reserve stock (5-minute TTL — cleanup cronjob releases expired ones)
+        // 5. Reserve stock for the same window as the PayOS payment link.
+        // This prevents the reservation from expiring while the customer can still pay.
         var sessionKey = $"order:{order.Id}";
         order.ReservationSessionKey = sessionKey;
 
@@ -246,20 +246,6 @@ internal class CheckoutHandler(
         {
             // COD: Confirm reservation immediately (stock is committed)
             await stockReservation.ConfirmReservationsAsync(sessionKey, order.Id, cancellationToken);
-        }
-
-        // 8. Update customer stats if logged in
-        if (req.CustomerId.HasValue)
-        {
-            // Calculate points: 1 point per 10,000 VND spent
-            var pointsEarned = (int)(total / 10000);
-
-            await sender.Send(new AddCustomerOrderCommand(
-                req.CustomerId.Value,
-                total,
-                pointsEarned,
-                order.Id
-            ), cancellationToken);
         }
 
         return new CheckoutResult(

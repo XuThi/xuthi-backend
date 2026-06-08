@@ -42,7 +42,7 @@ public class PayOsPaymentService : IPaymentService
             Description = $"XT {order.OrderNumber}",
             ReturnUrl = returnUrl,
             CancelUrl = cancelUrl,
-            ExpiredAt = (int)DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeSeconds(),
+            ExpiredAt = (int)DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds(),
             BuyerName = order.CustomerName,
             BuyerEmail = order.CustomerEmail,
             BuyerPhone = order.CustomerPhone,

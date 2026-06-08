@@ -7,8 +7,8 @@ namespace Order.Orders.BackgroundServices;
 
 /// <summary>
 /// Periodically cancels orders with expired PayOS payment links.
-/// PayOS links expire after 15 minutes. This service checks every 60 seconds
-/// for pending-payment PayOS orders older than 15 minutes and cancels them,
+/// PayOS links expire after 5 minutes. This service checks every 60 seconds
+/// for pending-payment PayOS orders older than 5 minutes and cancels them,
 /// releasing stock reservations.
 /// </summary>
 public class ExpiredPaymentCleanupService(
@@ -17,7 +17,7 @@ public class ExpiredPaymentCleanupService(
 {
     public static bool RequireCheck = true; // True by default for startup
     private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan PaymentExpiry = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan PaymentExpiry = TimeSpan.FromMinutes(5);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -80,7 +80,7 @@ public class ExpiredPaymentCleanupService(
             order.Status = OrderStatus.Cancelled;
             order.PaymentStatus = PaymentStatus.Failed;
             order.CancelledAt = DateTime.UtcNow;
-            order.CancellationReason = "Quá thời gian thanh toán (15 phút)";
+            order.CancellationReason = "Quá thời gian thanh toán (5 phút)";
 
             // Release stock reservation
             if (!string.IsNullOrEmpty(order.ReservationSessionKey))

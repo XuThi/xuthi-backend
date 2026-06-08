@@ -40,6 +40,12 @@ internal class AddCustomerOrderHandler(CustomerDbContext db)
         if (customer is null)
             return new AddCustomerOrderResult(CustomerTier.Standard, 0);
 
+        var alreadyRecorded = await db.PointsHistory
+            .AnyAsync(h => h.RelatedOrderId == cmd.OrderId && h.Type == PointsTransactionType.Earned, ct);
+
+        if (alreadyRecorded)
+            return new AddCustomerOrderResult(customer.Tier, customer.LoyaltyPoints);
+
         // Update stats
         customer.TotalSpent += cmd.OrderTotal;
         customer.TotalOrders++;

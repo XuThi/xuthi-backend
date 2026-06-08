@@ -47,15 +47,21 @@ internal class GetDashboardStatsHandler(
         var nextMonthStart = thisMonthStart.AddMonths(1);
         var lastMonthStart = thisMonthStart.AddMonths(-1);
 
-        // 1. Calculate Revenue
+        // 1. Calculate Revenue from completed, paid orders only.
         var thisMonthRevenue = await orderDb.Orders
             .AsNoTracking()
-            .Where(o => o.CreatedAt >= thisMonthStart && o.CreatedAt < nextMonthStart && o.Status != OrderStatus.Cancelled)
+            .Where(o => o.CreatedAt >= thisMonthStart
+                && o.CreatedAt < nextMonthStart
+                && o.Status == OrderStatus.Delivered
+                && o.PaymentStatus == PaymentStatus.Paid)
             .SumAsync(o => (decimal?)o.Total, ct) ?? 0;
 
         var lastMonthRevenue = await orderDb.Orders
             .AsNoTracking()
-            .Where(o => o.CreatedAt >= lastMonthStart && o.CreatedAt < thisMonthStart && o.Status != OrderStatus.Cancelled)
+            .Where(o => o.CreatedAt >= lastMonthStart
+                && o.CreatedAt < thisMonthStart
+                && o.Status == OrderStatus.Delivered
+                && o.PaymentStatus == PaymentStatus.Paid)
             .SumAsync(o => (decimal?)o.Total, ct) ?? 0;
 
         decimal revenueChange = 0;
@@ -136,7 +142,10 @@ internal class GetDashboardStatsHandler(
 
             var monthRevenue = await orderDb.Orders
                 .AsNoTracking()
-                .Where(o => o.CreatedAt >= mStart && o.CreatedAt < mEnd && o.Status != OrderStatus.Cancelled)
+                .Where(o => o.CreatedAt >= mStart
+                    && o.CreatedAt < mEnd
+                    && o.Status == OrderStatus.Delivered
+                    && o.PaymentStatus == PaymentStatus.Paid)
                 .SumAsync(o => (decimal?)o.Total, ct) ?? 0;
 
             monthlyRevenue.Add(new MonthlyRevenueDto(monthName, monthRevenue));

@@ -1,6 +1,7 @@
 using Customer.Data;
+using Customer.Customers.Features.AddCustomerOrder;
 using Customer.Customers.Models;
-using ProductCatalog.Data;
+using ProductCatalog.Products.Services;
 
 namespace Order.Orders.Features.UpdateOrderStatus;
 
@@ -20,8 +21,9 @@ public record UpdateOrderStatusResult(
 
 internal class UpdateOrderStatusHandler(
     OrderDbContext orderDb,
-    ProductCatalogDbContext catalogDb,
-    CustomerDbContext customerDb)
+    CustomerDbContext customerDb,
+    IStockReservationService stockReservation,
+    ISender sender)
     : ICommandHandler<UpdateOrderStatusCommand, UpdateOrderStatusResult>
 {
     public async Task<UpdateOrderStatusResult> Handle(UpdateOrderStatusCommand command, CancellationToken cancellationToken)
@@ -44,26 +46,13 @@ internal class UpdateOrderStatusHandler(
             order.CancelledAt = DateTime.UtcNow;
             order.CancellationReason = command.Reason;
 
-            // Deduct customer spending stats and recalculate tier
-            if (order.CustomerId.HasValue)
+            if (!string.IsNullOrEmpty(order.ReservationSessionKey))
             {
-                var customer = await customerDb.Customers
-                    .FirstOrDefaultAsync(c => c.Id == order.CustomerId.Value, cancellationToken);
-
-                if (customer is not null)
-                {
-                    customer.TotalSpent = Math.Max(0, customer.TotalSpent - order.Total);
-                    customer.TotalOrders = Math.Max(0, customer.TotalOrders - 1);
-                    customer.Tier = customer.TotalSpent switch
-                    {
-                        >= 10_000_000m => CustomerTier.Platinum,
-                        >= 5_000_000m => CustomerTier.Gold,
-                        >= 1_000_000m => CustomerTier.Silver,
-                        _ => CustomerTier.Standard
-                    };
-                    await customerDb.SaveChangesAsync(cancellationToken);
-                }
+                await stockReservation.ReleaseReservationsAsync(order.ReservationSessionKey, cancellationToken);
+                await stockReservation.RestoreConfirmedReservationsAsync(order.ReservationSessionKey, order.Id, cancellationToken);
             }
+
+            await ReverseCustomerOrderStatsIfAwarded(order, cancellationToken);
         }
 
         // Update timestamps based on new status
@@ -90,6 +79,20 @@ internal class UpdateOrderStatusHandler(
         order.UpdatedAt = DateTime.UtcNow;
 
         await orderDb.SaveChangesAsync(cancellationToken);
+
+        if (command.NewStatus == OrderStatus.Delivered
+            && order.PaymentStatus == PaymentStatus.Paid
+            && order.CustomerId.HasValue)
+        {
+            var pointsEarned = (int)(order.Total / 10000);
+
+            await sender.Send(new AddCustomerOrderCommand(
+                order.CustomerId.Value,
+                order.Total,
+                pointsEarned,
+                order.Id
+            ), cancellationToken);
+        }
 
         return new UpdateOrderStatusResult(
             order.Id,
@@ -119,5 +122,48 @@ internal class UpdateOrderStatusHandler(
             throw new InvalidOperationException(
                 $"Cannot transition from {current} to {target}");
         }
+    }
+
+    private async Task ReverseCustomerOrderStatsIfAwarded(CustomerOrder order, CancellationToken ct)
+    {
+        if (!order.CustomerId.HasValue)
+            return;
+
+        var customer = await customerDb.Customers
+            .FirstOrDefaultAsync(c => c.Id == order.CustomerId.Value, ct);
+
+        if (customer is null)
+            return;
+
+        var earnedHistory = await customerDb.PointsHistory
+            .FirstOrDefaultAsync(h => h.RelatedOrderId == order.Id && h.Type == PointsTransactionType.Earned, ct);
+
+        if (earnedHistory is null)
+            return;
+
+        customer.TotalSpent = Math.Max(0, customer.TotalSpent - order.Total);
+        customer.TotalOrders = Math.Max(0, customer.TotalOrders - 1);
+        customer.LoyaltyPoints = Math.Max(0, customer.LoyaltyPoints - earnedHistory.Points);
+        customer.Tier = customer.TotalSpent switch
+        {
+            >= 10_000_000m => CustomerTier.Platinum,
+            >= 5_000_000m => CustomerTier.Gold,
+            >= 1_000_000m => CustomerTier.Silver,
+            _ => CustomerTier.Standard
+        };
+        customer.UpdatedAt = DateTime.UtcNow;
+
+        customerDb.PointsHistory.Add(new PointsHistory
+        {
+            Id = Guid.NewGuid(),
+            CustomerId = customer.Id,
+            Type = PointsTransactionType.Adjusted,
+            Points = -earnedHistory.Points,
+            BalanceAfter = customer.LoyaltyPoints,
+            Description = "Order cancelled",
+            RelatedOrderId = order.Id
+        });
+
+        await customerDb.SaveChangesAsync(ct);
     }
 }

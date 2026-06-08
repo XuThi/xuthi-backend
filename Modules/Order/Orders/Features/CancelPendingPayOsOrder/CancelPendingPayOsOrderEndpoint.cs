@@ -4,6 +4,8 @@ using System.Security.Claims;
 
 namespace Order.Orders.Features.CancelPendingPayOsOrder;
 
+// TODO: Fuck this shit up
+
 public record CancelPendingPayOsOrderRequest(string? Reason = null);
 public record CancelPendingPayOsOrderResponse(
     Guid OrderId,
@@ -18,11 +20,11 @@ public class CancelPendingPayOsOrderEndpoint : ICarterModule
 {
     public void AddRoutes(IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/orders/{id:guid}/cancel-payment", async (
+        static async Task<IResult> CancelOrder(
             [FromRoute] Guid id,
             [FromBody] CancelPendingPayOsOrderRequest request,
             ClaimsPrincipal principal,
-            ISender sender) =>
+            ISender sender)
         {
             var userIdRaw = principal.FindFirstValue(ClaimTypes.NameIdentifier);
             Guid? userId = Guid.TryParse(userIdRaw, out var parsedUserId) ? parsedUserId : null;
@@ -39,14 +41,27 @@ public class CancelPendingPayOsOrderEndpoint : ICarterModule
 
             var response = result.Adapt<CancelPendingPayOsOrderResponse>();
             return Results.Ok(response);
-        })
+        }
+
+        app.MapPost("/api/orders/{id:guid}/cancel", CancelOrder)
+        .WithName("CancelPendingOrder")
+        .Produces<CancelPendingPayOsOrderResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .WithSummary("Cancel pending order")
+        .WithDescription("Cancel a pending order that belongs to the authenticated customer before admin confirmation")
+        .WithTags("Orders")
+        .RequireAuthorization("Authenticated");
+
+        app.MapPost("/api/orders/{id:guid}/cancel-payment", CancelOrder)
         .WithName("CancelPendingPayOsOrder")
         .Produces<CancelPendingPayOsOrderResponse>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Cancel pending PayOS order")
-        .WithDescription("Cancel only pending PayOS orders that belong to the authenticated customer")
+        .WithDescription("Compatibility route for cancelling pending PayOS orders")
         .WithTags("Orders")
         .RequireAuthorization("Authenticated");
     }

@@ -27,6 +27,11 @@ public interface IStockReservationService
     Task ReleaseReservationsAsync(string sessionKey, CancellationToken ct = default);
 
     /// <summary>
+    /// Restore stock for confirmed reservations when a committed order is cancelled.
+    /// </summary>
+    Task RestoreConfirmedReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default);
+
+    /// <summary>
     /// Clean up all expired reservations. Called by the background service.
     /// </summary>
     Task<int> CleanupExpiredReservationsAsync(CancellationToken ct = default);
