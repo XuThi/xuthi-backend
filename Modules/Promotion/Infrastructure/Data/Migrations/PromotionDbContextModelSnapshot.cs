@@ -253,6 +253,9 @@ namespace Promotion.Infrastructure.Data.Migrations
 
                     b.HasIndex("OrderId");
 
+                    b.HasIndex("OrderId", "VoucherId")
+                        .IsUnique();
+
                     b.HasIndex("VoucherId", "CustomerId");
 
                     b.ToTable("VoucherUsages");

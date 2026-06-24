@@ -3,6 +3,7 @@ using Mapster;
 namespace Order.Orders.Features.Checkout;
 
 public record CheckoutRequest(
+    Guid CartId,
     Guid? CustomerId,
 
     // Customer info
@@ -18,12 +19,6 @@ public record CheckoutRequest(
 
     // Payment
     PaymentMethod PaymentMethod,
-
-    // Cart items
-    List<CheckoutItem> Items,
-
-    // Optional voucher
-    string? VoucherCode,
 
     // PayOS redirect URLs (required for PayOS payment)
     string? ReturnUrl = null,

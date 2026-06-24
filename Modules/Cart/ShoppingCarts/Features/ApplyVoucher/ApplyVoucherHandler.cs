@@ -1,6 +1,6 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
-using Promotion.Vouchers.Features.ValidateVoucher;
+using Cart.ShoppingCarts.Services;
 
 using Core.Caching;
 
@@ -21,14 +21,17 @@ public class ApplyVoucherCommandValidator : AbstractValidator<ApplyVoucherComman
 }
 
 // Handler
-internal class ApplyVoucherHandler(CartDbContext cartDb, ISender sender, ICacheInvalidator cacheInvalidator)
+internal class ApplyVoucherHandler(
+    CartDbContext cartDb,
+    CartQuoteService quoteService,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<ApplyVoucherCommand, ApplyVoucherResult>
 {
     public async Task<ApplyVoucherResult> Handle(ApplyVoucherCommand cmd, CancellationToken ct)
     {
         var cart = await cartDb.ShoppingCarts
             .Include(c => c.Items)
-            .FirstOrDefaultAsync(c => c.Id == cmd.CartId, ct);
+            .FirstOrDefaultAsync(c => c.Id == cmd.CartId && c.Status == CartStatus.Active, ct);
 
         if (cart is null)
             return new ApplyVoucherResult(false, "Cart not found", 0, null);
@@ -36,24 +39,31 @@ internal class ApplyVoucherHandler(CartDbContext cartDb, ISender sender, ICacheI
         if (cart.Items.Count == 0)
             return new ApplyVoucherResult(false, "Cart is empty", 0, null);
 
-        // Validate voucher via Promotion module
-        var productIds = cart.Items.Select(i => i.ProductId).ToList();
-        var validateResult = await sender.Send(new ValidateVoucherQuery(
-            cmd.VoucherCode,
-            cart.Subtotal,
-            productIds,
-            null,
-            cart.CustomerId,
-            null
-        ), ct);
+        var previousVoucherId = cart.AppliedVoucherId;
+        var previousVoucherCode = cart.AppliedVoucherCode;
+        var previousVoucherDiscount = cart.VoucherDiscount;
 
-        if (!validateResult.IsValid)
-            return new ApplyVoucherResult(false, validateResult.ErrorMessage, 0, MapToDto(cart));
-
-        // Apply voucher to cart
-        cart.AppliedVoucherId = validateResult.VoucherId;
         cart.AppliedVoucherCode = cmd.VoucherCode.ToUpperInvariant().Trim();
-        cart.VoucherDiscount = validateResult.DiscountAmount;
+
+        CartQuote quote;
+        try
+        {
+            quote = await quoteService.RefreshQuoteAsync(cart, requirePurchasable: false, requireVoucherValid: true, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            cart.AppliedVoucherId = previousVoucherId;
+            cart.AppliedVoucherCode = previousVoucherCode;
+            cart.VoucherDiscount = previousVoucherDiscount;
+            var restoredQuote = await quoteService.RefreshQuoteAsync(
+                cart,
+                requirePurchasable: false,
+                requireVoucherValid: false,
+                ct);
+
+            return new ApplyVoucherResult(false, ex.Message, 0, CartMapper.ToDto(cart, restoredQuote.WaivesShipping));
+        }
+
         cart.UpdatedAt = DateTime.UtcNow;
 
         await cartDb.SaveChangesAsync(ct);
@@ -61,17 +71,6 @@ internal class ApplyVoucherHandler(CartDbContext cartDb, ISender sender, ICacheI
         // Invalidate cart cache
         cacheInvalidator.Invalidate(CacheKeys.Cart);
 
-        return new ApplyVoucherResult(true, null, validateResult.DiscountAmount, MapToDto(cart));
+        return new ApplyVoucherResult(true, null, cart.VoucherDiscount, CartMapper.ToDto(cart, quote.WaivesShipping));
     }
-
-    private static CartDto MapToDto(ShoppingCart cart) => new(
-        cart.Id, cart.SessionId, cart.CustomerId,
-        cart.Items.Select(i => new CartItemDto(
-            i.Id, i.ProductId, i.VariantId,
-            i.ProductName, i.VariantSku, i.VariantDescription, i.ImageUrl,
-            i.UnitPrice, i.CompareAtPrice, i.Quantity, i.TotalPrice,
-            i.AvailableStock, i.IsInStock, i.IsOnSale
-        )).ToList(),
-        cart.Subtotal, cart.VoucherDiscount, cart.AppliedVoucherCode, cart.Total, cart.TotalItems
-    );
 }

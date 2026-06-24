@@ -101,6 +101,9 @@ namespace Cart.Infrastructure.Data.Migrations
                     b.Property<Guid?>("AppliedVoucherId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("CreatedAt");
@@ -115,6 +118,9 @@ namespace Cart.Infrastructure.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("UpdatedAt");
@@ -126,11 +132,11 @@ namespace Cart.Infrastructure.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CustomerId")
-                        .HasFilter("\"CustomerId\" IS NOT NULL");
+                        .HasFilter("\"CustomerId\" IS NOT NULL AND \"Status\" = 1");
 
                     b.HasIndex("SessionId")
                         .IsUnique()
-                        .HasFilter("\"SessionId\" IS NOT NULL");
+                        .HasFilter("\"SessionId\" IS NOT NULL AND \"Status\" = 1");
 
                     b.ToTable("ShoppingCarts");
                 });

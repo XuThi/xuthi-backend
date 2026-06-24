@@ -24,9 +24,13 @@ public class CartDbContext(
         modelBuilder.Entity<ShoppingCart>(entity =>
         {
             entity.HasKey(c => c.Id);
-            entity.HasIndex(c => c.SessionId).IsUnique().HasFilter("\"SessionId\" IS NOT NULL");
-            entity.HasIndex(c => c.CustomerId).HasFilter("\"CustomerId\" IS NOT NULL");
+            entity.HasIndex(c => c.SessionId)
+                .IsUnique()
+                .HasFilter("\"SessionId\" IS NOT NULL AND \"Status\" = 1");
+            entity.HasIndex(c => c.CustomerId)
+                .HasFilter("\"CustomerId\" IS NOT NULL AND \"Status\" = 1");
             entity.Property(c => c.SessionId).HasMaxLength(100);
+            entity.Property(c => c.Status).HasConversion<int>();
             entity.Property(c => c.AppliedVoucherCode).HasMaxLength(50);
             entity.Property(c => c.VoucherDiscount).HasPrecision(18, 2);
 

@@ -1,41 +1,37 @@
+using Cart.ShoppingCarts.Features.QuoteAndConsumeCart;
 using Order.Orders.Events;
 using Order.Orders.Services;
-using ProductCatalog.Data;
 using ProductCatalog.Products.Services;
-using Promotion.Vouchers.Features.ValidateVoucher;
-using Promotion.Data;
 using Order.Orders.Features.GetShippingSettings;
+using Promotion.Vouchers.Features.RedeemVoucher;
 
 namespace Order.Orders.Features.Checkout;
 
 public record CheckoutCommand(CheckoutRequest Request) : ICommand<CheckoutResult>;
 public record CheckoutResult(Guid OrderId, string OrderNumber, decimal Total, string Status, string? PaymentUrl = null);
-public record CheckoutItem(Guid ProductId, Guid VariantId, int Quantity);
 
 public class CheckoutCommandValidator : AbstractValidator<CheckoutCommand>
 {
     public CheckoutCommandValidator()
     {
+        RuleFor(x => x.Request.CartId).NotEmpty();
         RuleFor(x => x.Request.CustomerName).NotEmpty().MaximumLength(100);
         RuleFor(x => x.Request.CustomerEmail).NotEmpty().EmailAddress();
         RuleFor(x => x.Request.CustomerPhone).NotEmpty().MaximumLength(20);
         RuleFor(x => x.Request.ShippingAddress).NotEmpty().MaximumLength(500);
         RuleFor(x => x.Request.ShippingCity).NotEmpty();
         RuleFor(x => x.Request.ShippingWard);
-        RuleFor(x => x.Request.Items).NotEmpty().WithMessage("Cart cannot be empty");
-        RuleForEach(x => x.Request.Items).ChildRules(item =>
-        {
-            item.RuleFor(i => i.ProductId).NotEmpty();
-            item.RuleFor(i => i.VariantId).NotEmpty();
-            item.RuleFor(i => i.Quantity).GreaterThan(0);
-        });
+        RuleFor(x => x.Request.ReturnUrl)
+            .NotEmpty()
+            .When(x => x.Request.PaymentMethod == PaymentMethod.PayOS);
+        RuleFor(x => x.Request.CancelUrl)
+            .NotEmpty()
+            .When(x => x.Request.PaymentMethod == PaymentMethod.PayOS);
     }
 }
 
 internal class CheckoutHandler(
     OrderDbContext orderDb,
-    ProductCatalogDbContext catalogDb,
-    PromotionDbContext promotionDb,
     IStockReservationService stockReservation,
     IPaymentService paymentService,
     ISender sender)
@@ -45,139 +41,49 @@ internal class CheckoutHandler(
     {
         var req = command.Request;
 
-        // 1. Validate and fetch variants
-        var variantIds = req.Items.Select(i => i.VariantId).ToList();
-        var variants = await catalogDb.Variants
-            .Include(v => v.OptionSelections)
-            .Where(v => variantIds.Contains(v.Id) && !v.IsDeleted)
-            .ToListAsync(cancellationToken);
+        var quote = (await sender.Send(new QuoteCartForCheckoutCommand(req.CartId, req.CustomerId), cancellationToken)).Quote;
 
-        // Get products for names
-        var productIds = req.Items.Select(i => i.ProductId).ToList();
-        var products = await catalogDb.Products
-            .Include(p => p.Images)
-                .ThenInclude(pi => pi.Image)
-            .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, cancellationToken);
-
-        var optionIds = variants
-            .SelectMany(v => v.OptionSelections.Select(os => os.VariantOptionId))
-            .Distinct()
-            .ToList();
-
-        var optionNameMap = optionIds.Count == 0
-            ? new Dictionary<string, string>()
-            : await catalogDb.VariantOptions
-                .Where(vo => optionIds.Contains(vo.Id))
-                .ToDictionaryAsync(vo => vo.Id, vo => vo.Name, cancellationToken);
-
-        // Validate all items exist
-        var orderItems = new List<OrderItem>();
-        decimal subtotal = 0;
-
-        foreach (var item in req.Items)
+        var orderItems = quote.Items.Select(item => new OrderItem
         {
-            var variant = variants.FirstOrDefault(v => v.Id == item.VariantId);
-            if (variant is null)
-                throw new InvalidOperationException($"Variant {item.VariantId} not found");
+            Id = Guid.NewGuid(),
+            ProductId = item.ProductId,
+            VariantId = item.VariantId,
+            ProductName = item.ProductName,
+            VariantSku = item.VariantSku,
+            VariantDescription = item.VariantDescription,
+            ImageUrl = item.ImageUrl,
+            UnitPrice = item.UnitPrice,
+            CompareAtPrice = item.CompareAtPrice,
+            Quantity = item.Quantity,
+            TotalPrice = item.TotalPrice
+        }).ToList();
 
-            if (variant.StockQuantity < item.Quantity)
-                throw new InvalidOperationException(
-                    $"Không đủ tồn kho cho sản phẩm {variant.Sku}. Chỉ còn {variant.StockQuantity} sản phẩm.");
+        var subtotal = quote.Subtotal;
+        var discountAmount = quote.VoucherDiscount;
+        var voucherId = quote.AppliedVoucherId;
 
-            var product = products.GetValueOrDefault(item.ProductId);
-            if (product is null)
-                throw new InvalidOperationException($"Product {item.ProductId} not found");
-
-            var (unitPrice, compareAtPrice) = await ResolveSalePrice(
-                promotionDb,
-                product.Id,
-                variant.Id,
-                variant.Price,
-                cancellationToken);
-
-            var itemTotal = unitPrice * item.Quantity;
-            subtotal += itemTotal;
-
-            // Get first image URL
-            var imageUrl = product.Images.OrderBy(i => i.SortOrder).FirstOrDefault()?.Image.Url;
-
-            // Build variant description from option selections
-            var variantDesc = string.Join(", ", variant.OptionSelections.Select(os =>
-            {
-                var name = optionNameMap.TryGetValue(os.VariantOptionId, out var n) ? n : os.VariantOptionId;
-                return $"{name}: {os.Value}";
-            }));
-
-            orderItems.Add(new OrderItem
-            {
-                Id = Guid.NewGuid(),
-                ProductId = item.ProductId,
-                VariantId = item.VariantId,
-                ProductName = product.Name,
-                VariantSku = variant.Sku,
-                VariantDescription = variantDesc,
-                ImageUrl = imageUrl,
-                UnitPrice = unitPrice,
-                CompareAtPrice = compareAtPrice,
-                Quantity = item.Quantity,
-                TotalPrice = itemTotal
-            });
-        }
-
-        // 2. Apply voucher via Promotion module
-        decimal discountAmount = 0;
-        Guid? voucherId = null;
-
-        if (!string.IsNullOrWhiteSpace(req.VoucherCode))
-        {
-            var voucherResult = await sender.Send(new ValidateVoucherQuery(
-                req.VoucherCode,
-                subtotal,
-                productIds,
-                null, // CategoryId
-                req.CustomerId,
-                null // CustomerTier - could be fetched from Customer module
-            ), cancellationToken);
-
-            if (voucherResult.IsValid)
-            {
-                discountAmount = voucherResult.DiscountAmount;
-                voucherId = voucherResult.VoucherId;
-
-                // Increment voucher usage
-                var voucher = await promotionDb.Vouchers.FindAsync([voucherId], cancellationToken);
-                if (voucher != null)
-                {
-                    voucher.CurrentUsageCount++;
-                    voucher.UpdatedAt = DateTime.UtcNow;
-                }
-            }
-            else
-            {
-                throw new InvalidOperationException(voucherResult.ErrorMessage ?? "Invalid voucher");
-            }
-        }
-
-        // 3. Calculate shipping based on dynamic settings
+        // 2. Calculate shipping based on dynamic settings
         var shippingResult = await sender.Send(new CalculateShipping.CalculateShippingQuery(
             req.PaymentMethod,
             req.ShippingCity,
             req.ShippingWard,
-            req.Items.Select(i => new CalculateShipping.CalculateShippingItem(i.ProductId, i.VariantId, i.Quantity)).ToList(),
+            quote.Items.Select(i => new CalculateShipping.CalculateShippingItem(i.ProductId, i.VariantId, i.Quantity)).ToList(),
             req.ShippingDistrict
         ), cancellationToken);
         decimal shippingFee = shippingResult.ShippingFee;
+        if (quote.WaivesShipping)
+            shippingFee = 0;
 
-        // 4. Create order
+        // 3. Create order
+        var orderId = Guid.NewGuid();
         var orderNumber = GenerateOrderNumber();
         var total = subtotal - discountAmount + shippingFee;
 
         var order = new CustomerOrder
         {
-            Id = Guid.NewGuid(),
+            Id = orderId,
             OrderNumber = orderNumber,
-            CustomerId = req.CustomerId,
+            CustomerId = quote.CustomerId,
             CustomerName = req.CustomerName,
             CustomerEmail = req.CustomerEmail,
             CustomerPhone = req.CustomerPhone,
@@ -192,44 +98,69 @@ internal class CheckoutHandler(
             ShippingFee = shippingFee,
             Total = total,
             VoucherId = voucherId,
-            VoucherCode = req.VoucherCode,
+            VoucherCode = quote.AppliedVoucherCode,
             PaymentMethod = req.PaymentMethod,
             Status = OrderStatus.Pending,
             PaymentStatus = PaymentStatus.Pending,
             Items = orderItems
         };
 
-        // COD can send order notifications immediately.
-        // PayOS notifications are published only after webhook confirms payment success.
-        if (req.PaymentMethod == PaymentMethod.CashOnDelivery)
-        {
-            order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
-        }
-
-        // 5. Reserve stock for the same window as the PayOS payment link.
+        // 4. Reserve stock for the same window as the PayOS payment link.
         // This prevents the reservation from expiring while the customer can still pay.
         var sessionKey = $"order:{order.Id}";
         order.ReservationSessionKey = sessionKey;
 
         await stockReservation.ReserveStockAsync(
             sessionKey,
-            req.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
+            quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
             TimeSpan.FromMinutes(5),
             cancellationToken);
 
-        // 6. Save order
+        // 5. Save order
         orderDb.Orders.Add(order);
         await orderDb.SaveChangesAsync(cancellationToken);
-        await promotionDb.SaveChangesAsync(cancellationToken);
 
-        // 7. Handle payment based on method
+        try
+        {
+            if (voucherId.HasValue)
+            {
+                await sender.Send(new RedeemVoucherCommand(
+                    voucherId.Value,
+                    quote.CustomerId,
+                    order.Id,
+                    discountAmount), cancellationToken);
+            }
+        }
+        catch
+        {
+            orderDb.Orders.Remove(order);
+            await orderDb.SaveChangesAsync(cancellationToken);
+            await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+            throw;
+        }
+
+        await sender.Send(new ConsumeQuotedCartCommand(req.CartId, req.CustomerId), cancellationToken);
+
+        // COD can send order notifications immediately after voucher redemption succeeds.
+        // PayOS notifications are published only after webhook confirms payment success.
+        if (req.PaymentMethod == PaymentMethod.CashOnDelivery)
+        {
+            order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
+            await orderDb.SaveChangesAsync(cancellationToken);
+        }
+
+        // 6. Handle payment based on method
         string? paymentUrl = null;
 
         if (req.PaymentMethod == PaymentMethod.PayOS)
         {
             // Create PayOS payment link
-            var returnUrl = AppendOrderIdToUrl(req.ReturnUrl, order.Id);
-            var cancelUrl = AppendOrderIdToUrl(req.CancelUrl, order.Id);
+            var returnUrl = AppendOrderIdToUrl(
+                req.ReturnUrl ?? throw new InvalidOperationException("ReturnUrl is required for PayOS"),
+                order.Id);
+            var cancelUrl = AppendOrderIdToUrl(
+                req.CancelUrl ?? throw new InvalidOperationException("CancelUrl is required for PayOS"),
+                order.Id);
 
             var payResult = await paymentService.CreatePaymentLinkAsync(
                 order, returnUrl, cancelUrl, cancellationToken);
@@ -273,33 +204,4 @@ internal class CheckoutHandler(
         return $"XT-{date}-{random}";
     }
 
-    private static async Task<(decimal UnitPrice, decimal? CompareAtPrice)> ResolveSalePrice(
-        PromotionDbContext promotionDb,
-        Guid productId,
-        Guid variantId,
-        decimal basePrice,
-        CancellationToken ct)
-    {
-        var now = DateTime.UtcNow;
-        var saleItem = await promotionDb.SaleCampaignItems
-            .Include(i => i.SaleCampaign)
-            .Where(i => i.ProductId == productId && (i.VariantId == null || i.VariantId == variantId))
-            .Where(i => i.SaleCampaign.IsActive && i.SaleCampaign.StartDate <= now && i.SaleCampaign.EndDate >= now)
-            .OrderByDescending(i => i.VariantId.HasValue)
-            .ThenBy(i => i.SalePrice)
-            .FirstOrDefaultAsync(ct);
-
-        if (saleItem is null)
-        {
-            return (basePrice, null);
-        }
-
-        var original = saleItem.OriginalPrice ?? basePrice;
-        if (original < saleItem.SalePrice)
-        {
-            original = basePrice;
-        }
-
-        return (saleItem.SalePrice, original);
-    }
 }

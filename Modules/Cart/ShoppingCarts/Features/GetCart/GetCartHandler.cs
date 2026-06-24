@@ -1,7 +1,6 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
-using Microsoft.Extensions.Caching.Memory;
-using Core.Caching;
+using Cart.ShoppingCarts.Services;
 
 namespace Cart.ShoppingCarts.Features.GetCart;
 
@@ -18,75 +17,42 @@ public class GetCartQueryValidator : AbstractValidator<GetCartQuery>
 }
 
 /// <summary>
-/// Get cart by session ID, customer ID, or cart ID with in-memory caching.
+/// Get cart by session ID, customer ID, or cart ID.
 /// </summary>
-internal class GetCartHandler(CartDbContext db, IMemoryCache cache, ICacheInvalidator cacheInvalidator)
+internal class GetCartHandler(CartDbContext db, CartQuoteService quoteService)
     : IQueryHandler<GetCartQuery, GetCartResult>
 {
     public async Task<GetCartResult> Handle(GetCartQuery query, CancellationToken ct)
     {
-        var cacheKey = BuildCacheKey(query);
-        
-        if (cache.TryGetValue(cacheKey, out GetCartResult? cachedResult))
-        {
-            return cachedResult!;
-        }
-
         ShoppingCart? cart = null;
 
         if (query.CartId.HasValue)
         {
             cart = await db.ShoppingCarts
                 .Include(c => c.Items)
-                .FirstOrDefaultAsync(c => c.Id == query.CartId, ct);
+                .FirstOrDefaultAsync(c => c.Id == query.CartId && c.Status == CartStatus.Active, ct);
         }
 
         if (cart == null && query.CustomerId.HasValue)
         {
             cart = await db.ShoppingCarts
                 .Include(c => c.Items)
-                .FirstOrDefaultAsync(c => c.CustomerId == query.CustomerId, ct);
+                .FirstOrDefaultAsync(c => c.CustomerId == query.CustomerId && c.Status == CartStatus.Active, ct);
         }
         else if (cart == null && !string.IsNullOrEmpty(query.SessionId))
         {
             cart = await db.ShoppingCarts
                 .Include(c => c.Items)
-                .FirstOrDefaultAsync(c => c.SessionId == query.SessionId, ct);
+                .FirstOrDefaultAsync(c => c.SessionId == query.SessionId && c.Status == CartStatus.Active, ct);
         }
 
-        var result = new GetCartResult(cart is null ? null : MapToDto(cart));
+        if (cart is null)
+            return new GetCartResult(null);
 
-        // Cache for 5 minutes, track key for invalidation
-        var cacheOptions = new MemoryCacheEntryOptions()
-            .SetAbsoluteExpiration(TimeSpan.FromMinutes(5));
-        
-        cache.Set(cacheKey, result, cacheOptions);
-        cacheInvalidator.TrackKey(cacheKey);
+        var quote = await quoteService.RefreshQuoteAsync(cart, requirePurchasable: false, requireVoucherValid: false, ct);
+        cart.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
 
-        return result;
+        return new GetCartResult(CartMapper.ToDto(cart, quote.WaivesShipping));
     }
-
-    private static string BuildCacheKey(GetCartQuery query)
-    {
-        if (query.CartId.HasValue) return CacheKeys.Build(CacheKeys.Cart, $"id={query.CartId}");
-        if (query.CustomerId.HasValue) return CacheKeys.Build(CacheKeys.Cart, $"customer={query.CustomerId}");
-        return CacheKeys.Build(CacheKeys.Cart, $"session={query.SessionId}");
-    }
-
-    private static CartDto MapToDto(ShoppingCart cart) => new(
-        cart.Id,
-        cart.SessionId,
-        cart.CustomerId,
-        [.. cart.Items.Select(i => new CartItemDto(
-            i.Id, i.ProductId, i.VariantId,
-            i.ProductName, i.VariantSku, i.VariantDescription, i.ImageUrl,
-            i.UnitPrice, i.CompareAtPrice, i.Quantity, i.TotalPrice,
-            i.AvailableStock, i.IsInStock, i.IsOnSale
-        ))],
-        cart.Subtotal,
-        cart.VoucherDiscount,
-        cart.AppliedVoucherCode,
-        cart.Total,
-        cart.TotalItems
-    );
 }

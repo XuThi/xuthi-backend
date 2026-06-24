@@ -4,7 +4,7 @@ namespace Promotion.Vouchers.Features.ValidateVoucher;
 
 public record ValidateVoucherRequest(
     string Code,
-    decimal CartTotal,
+    decimal CartQuoteAmount,
     List<Guid>? ProductIds = null,
     Guid? CategoryId = null,
     Guid? CustomerId = null,
@@ -24,7 +24,7 @@ public class ValidateVoucherEndpoint : ICarterModule
         {
             var query = new ValidateVoucherQuery(
                 request.Code,
-                request.CartTotal,
+                request.CartQuoteAmount,
                 request.ProductIds,
                 request.CategoryId,
                 request.CustomerId,

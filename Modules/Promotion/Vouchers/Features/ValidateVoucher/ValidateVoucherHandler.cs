@@ -2,12 +2,20 @@ namespace Promotion.Vouchers.Features.ValidateVoucher;
 
 public record ValidateVoucherQuery(
     string Code, 
-    decimal CartTotal, 
+    decimal CartQuoteAmount,
     List<Guid>? ProductIds = null,
     Guid? CategoryId = null,
     Guid? CustomerId = null,
-    int? CustomerTier = null) 
+    int? CustomerTier = null,
+    int? CustomerTotalOrders = null,
+    List<VoucherValidationLine>? Lines = null)
     : IQuery<ValidateVoucherResult>;
+
+public record VoucherValidationLine(
+    Guid ProductId,
+    Guid CategoryId,
+    decimal LineTotal,
+    bool IsOnSale);
 
 public record ValidateVoucherResult(
     bool IsValid,
@@ -40,19 +48,23 @@ internal class ValidateVoucherHandler(PromotionDbContext db)
         if (voucher.MaxUsageCount.HasValue && voucher.CurrentUsageCount >= voucher.MaxUsageCount)
             return new ValidateVoucherResult(false, "Mã giảm giá đã hết lượt sử dụng", null, null, 0);
 
-        if (voucher.MinimumOrderAmount.HasValue && query.CartTotal < voucher.MinimumOrderAmount)
+        if (voucher.MinimumOrderAmount.HasValue && query.CartQuoteAmount < voucher.MinimumOrderAmount)
             return new ValidateVoucherResult(false, 
                 $"Đơn hàng tối thiểu {voucher.MinimumOrderAmount:N0}đ để áp dụng mã này", null, null, 0);
 
-        if (voucher.MinimumCustomerTier.HasValue && query.CustomerTier.HasValue)
+        if (voucher.MinimumCustomerTier.HasValue)
         {
-            if (query.CustomerTier < voucher.MinimumCustomerTier)
+            if (!query.CustomerTier.HasValue || query.CustomerTier < voucher.MinimumCustomerTier)
                 return new ValidateVoucherResult(false, 
-                    $"Mã giảm giá này dành cho khách hàng VIP cấp {voucher.MinimumCustomerTier}+", null, null, 0);
+                    $"Mã giảm giá này dành cho hạng khách hàng {voucher.MinimumCustomerTier}+", null, null, 0);
         }
 
-        if (voucher.MaxUsagePerCustomer.HasValue && query.CustomerId.HasValue)
+        if (voucher.MaxUsagePerCustomer.HasValue)
         {
+            if (!query.CustomerId.HasValue)
+                return new ValidateVoucherResult(false,
+                    "Bạn cần đăng nhập để sử dụng mã giảm giá này", null, null, 0);
+
             var customerUsageCount = await db.VoucherUsages
                 .CountAsync(u => u.VoucherId == voucher.Id && u.CustomerId == query.CustomerId, ct);
             
@@ -61,35 +73,75 @@ internal class ValidateVoucherHandler(PromotionDbContext db)
                     "Bạn đã sử dụng hết lượt cho mã giảm giá này", null, null, 0);
         }
 
-        if (voucher.ApplicableCategoryId.HasValue && query.CategoryId.HasValue)
+        if (voucher.FirstPurchaseOnly)
         {
-            if (query.CategoryId != voucher.ApplicableCategoryId)
-                return new ValidateVoucherResult(false, 
-                    "Mã giảm giá không áp dụng cho danh mục sản phẩm này", null, null, 0);
+            if (!query.CustomerId.HasValue || !query.CustomerTotalOrders.HasValue || query.CustomerTotalOrders > 0)
+                return new ValidateVoucherResult(false,
+                    "Mã giảm giá này chỉ áp dụng cho đơn hàng đầu tiên", null, null, 0);
         }
 
-        if (voucher.ApplicableProductIds?.Count > 0 && query.ProductIds?.Count > 0)
+        var discountBase = ResolveDiscountBase(voucher, query);
+        if (discountBase <= 0)
         {
-            var hasApplicableProduct = query.ProductIds.Any(pid => voucher.ApplicableProductIds.Contains(pid));
-            if (!hasApplicableProduct)
-                return new ValidateVoucherResult(false, 
-                    "Mã giảm giá không áp dụng cho sản phẩm trong giỏ hàng", null, null, 0);
+            return new ValidateVoucherResult(false,
+                "Mã giảm giá không áp dụng cho sản phẩm trong giỏ hàng", null, null, 0);
         }
 
         decimal discountAmount = voucher.Type switch
         {
-            VoucherType.Percentage => query.CartTotal * (voucher.DiscountValue / 100),
+            VoucherType.Percentage => discountBase * (voucher.DiscountValue / 100),
             VoucherType.FixedAmount => voucher.DiscountValue,
-            VoucherType.FreeShipping => voucher.DiscountValue,
+            VoucherType.FreeShipping => 0,
             _ => 0
         };
 
         if (voucher.MaximumDiscountAmount.HasValue && discountAmount > voucher.MaximumDiscountAmount)
             discountAmount = voucher.MaximumDiscountAmount.Value;
 
-        if (discountAmount > query.CartTotal)
-            discountAmount = query.CartTotal;
+        if (voucher.Type != VoucherType.FreeShipping && discountAmount > discountBase)
+            discountAmount = discountBase;
 
         return new ValidateVoucherResult(true, null, voucher.Id, voucher.Type, discountAmount);
+    }
+
+    private static decimal ResolveDiscountBase(Voucher voucher, ValidateVoucherQuery query)
+    {
+        var hasLineScope =
+            voucher.ApplicableCategoryId.HasValue ||
+            voucher.ApplicableProductIds?.Count > 0 ||
+            !voucher.CanCombineWithSalePrice;
+
+        if (!hasLineScope)
+            return query.CartQuoteAmount;
+
+        if (query.Lines is { Count: > 0 })
+        {
+            var eligibleLines = query.Lines.AsEnumerable();
+
+            if (voucher.ApplicableCategoryId.HasValue)
+                eligibleLines = eligibleLines.Where(l => l.CategoryId == voucher.ApplicableCategoryId.Value);
+
+            if (voucher.ApplicableProductIds?.Count > 0)
+                eligibleLines = eligibleLines.Where(l => voucher.ApplicableProductIds.Contains(l.ProductId));
+
+            if (!voucher.CanCombineWithSalePrice)
+                eligibleLines = eligibleLines.Where(l => !l.IsOnSale);
+
+            return eligibleLines.Sum(l => l.LineTotal);
+        }
+
+        if (voucher.ApplicableCategoryId.HasValue)
+        {
+            if (!query.CategoryId.HasValue || query.CategoryId != voucher.ApplicableCategoryId)
+                return 0;
+        }
+
+        if (voucher.ApplicableProductIds?.Count > 0)
+        {
+            if (query.ProductIds is null || !query.ProductIds.Any(pid => voucher.ApplicableProductIds.Contains(pid)))
+                return 0;
+        }
+
+        return query.CartQuoteAmount;
     }
 }

@@ -1,5 +1,6 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
+using Cart.ShoppingCarts.Services;
 
 using Core.Caching;
 
@@ -17,34 +18,38 @@ public class MergeCartsCommandValidator : AbstractValidator<MergeCartsCommand>
     }
 }
 
-internal class MergeCartsHandler(CartDbContext db, ICacheInvalidator cacheInvalidator)
+internal class MergeCartsHandler(
+    CartDbContext db,
+    CartQuoteService quoteService,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<MergeCartsCommand, MergeCartsResult>
 {
     public async Task<MergeCartsResult> Handle(MergeCartsCommand cmd, CancellationToken ct)
     {
         var anonymousCart = await db.ShoppingCarts
             .Include(c => c.Items)
-            .FirstOrDefaultAsync(c => c.SessionId == cmd.SessionId, ct);
+            .FirstOrDefaultAsync(c => c.SessionId == cmd.SessionId && c.Status == CartStatus.Active, ct);
 
         if (anonymousCart is null || anonymousCart.Items.Count == 0)
             return new MergeCartsResult(false, null);
 
         var customerCart = await db.ShoppingCarts
             .Include(c => c.Items)
-            .FirstOrDefaultAsync(c => c.CustomerId == cmd.CustomerId, ct);
+            .FirstOrDefaultAsync(c => c.CustomerId == cmd.CustomerId && c.Status == CartStatus.Active, ct);
 
         if (customerCart is null)
         {
             // Just transfer the anonymous cart to the customer
             anonymousCart.CustomerId = cmd.CustomerId;
             anonymousCart.SessionId = null;
+            var quote = await quoteService.RefreshQuoteAsync(anonymousCart, requirePurchasable: false, requireVoucherValid: false, ct);
             anonymousCart.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
             // Invalidate cart cache
             cacheInvalidator.Invalidate(CacheKeys.Cart);
 
-            return new MergeCartsResult(true, MapToDto(anonymousCart));
+            return new MergeCartsResult(true, CartMapper.ToDto(anonymousCart, quote.WaivesShipping));
         }
 
         // Merge items from anonymous cart into customer cart
@@ -74,6 +79,7 @@ internal class MergeCartsHandler(CartDbContext db, ICacheInvalidator cacheInvali
         }
 
         customerCart.UpdatedAt = DateTime.UtcNow;
+        var mergedQuote = await quoteService.RefreshQuoteAsync(customerCart, requirePurchasable: false, requireVoucherValid: false, ct);
 
         // Delete anonymous cart
         db.ShoppingCarts.Remove(anonymousCart);
@@ -83,17 +89,6 @@ internal class MergeCartsHandler(CartDbContext db, ICacheInvalidator cacheInvali
         // Invalidate cart cache
         cacheInvalidator.Invalidate(CacheKeys.Cart);
 
-        return new MergeCartsResult(true, MapToDto(customerCart));
+        return new MergeCartsResult(true, CartMapper.ToDto(customerCart, mergedQuote.WaivesShipping));
     }
-
-    private static CartDto MapToDto(ShoppingCart cart) => new(
-        cart.Id, cart.SessionId, cart.CustomerId,
-        cart.Items.Select(i => new CartItemDto(
-            i.Id, i.ProductId, i.VariantId,
-            i.ProductName, i.VariantSku, i.VariantDescription, i.ImageUrl,
-            i.UnitPrice, i.CompareAtPrice, i.Quantity, i.TotalPrice,
-            i.AvailableStock, i.IsInStock, i.IsOnSale
-        )).ToList(),
-        cart.Subtotal, cart.VoucherDiscount, cart.AppliedVoucherCode, cart.Total, cart.TotalItems
-    );
 }

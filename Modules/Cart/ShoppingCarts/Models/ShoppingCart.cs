@@ -12,6 +12,9 @@ public class ShoppingCart : Aggregate<Guid>
     public string? SessionId { get; set; } // Browser session ID (anonymous)
     public Guid? CustomerId { get; set; } // Customer ID (logged in)
 
+    public CartStatus Status { get; set; } = CartStatus.Active;
+    public DateTime? ConsumedAt { get; set; }
+
     // Applied voucher (validated, not yet used until checkout)
     public Guid? AppliedVoucherId { get; set; }
     public string? AppliedVoucherCode { get; set; }
@@ -27,4 +30,10 @@ public class ShoppingCart : Aggregate<Guid>
     public decimal Subtotal => Items.Sum(i => i.TotalPrice);
     public decimal Total => Math.Max(0, Subtotal - VoucherDiscount);
     public int TotalItems => Items.Sum(i => i.Quantity);
+}
+
+public enum CartStatus
+{
+    Active = 1,
+    Consumed = 2
 }

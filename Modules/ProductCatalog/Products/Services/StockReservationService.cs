@@ -18,34 +18,26 @@ public class StockReservationService(
         CancellationToken ct = default)
     {
         var expiresAt = DateTime.UtcNow.Add(ttl ?? DefaultTtl);
-        var variantIds = items.Select(i => i.VariantId).ToList();
+        var requestedItems = items
+            .GroupBy(i => i.VariantId)
+            .Select(g => (VariantId: g.Key, Quantity: g.Sum(x => x.Quantity)))
+            .ToList();
 
-        var variants = await db.Variants
+        var variantIds = requestedItems.Select(i => i.VariantId).ToList();
+        var variantSkuMap = await db.Variants
             .Where(v => variantIds.Contains(v.Id))
-            .ToListAsync(ct);
+            .ToDictionaryAsync(v => v.Id, v => v.Sku, ct);
 
         var reservationIds = new List<Guid>();
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
-        foreach (var (variantId, quantity) in items)
+        foreach (var (variantId, quantity) in requestedItems)
         {
-            var variant = variants.FirstOrDefault(v => v.Id == variantId)
-                ?? throw new InvalidOperationException($"Variant {variantId} not found");
+            if (!variantSkuMap.TryGetValue(variantId, out var sku))
+                throw new InvalidOperationException($"Variant {variantId} not found");
 
-            // Check available stock (actual stock minus active reservations that are NOT for this session)
-            var existingReserved = await db.StockReservations
-                .Where(r => r.VariantId == variantId
-                    && r.Status == StockReservationStatus.Reserved
-                    && r.ExpiresAt > DateTime.UtcNow
-                    && r.SessionKey != sessionKey)
-                .SumAsync(r => r.Quantity, ct);
-
-            var availableStock = variant.StockQuantity - existingReserved;
-
-            if (availableStock < quantity)
-                throw new InvalidOperationException(
-                    $"Không đủ tồn kho cho SKU {variant.Sku}. Chỉ còn {availableStock} sản phẩm có sẵn.");
-
-            // Release any existing reservation for this session + variant
+            // Release any existing reservation for this session + variant before creating a fresh hold.
             var existingForSession = await db.StockReservations
                 .Where(r => r.VariantId == variantId
                     && r.SessionKey == sessionKey
@@ -55,6 +47,27 @@ public class StockReservationService(
             foreach (var existing in existingForSession)
             {
                 existing.Status = StockReservationStatus.Released;
+                await IncrementStockAsync(existing.VariantId, existing.Quantity, ct);
+            }
+
+            // Atomic stock hold. Under concurrent checkout, only transactions that
+            // can satisfy StockQuantity >= quantity will update a row.
+            var rowsAffected = await db.Variants
+                .Where(v => v.Id == variantId
+                    && !v.IsDeleted
+                    && v.StockQuantity >= quantity)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(v => v.StockQuantity, v => v.StockQuantity - quantity), ct);
+
+            if (rowsAffected == 0)
+            {
+                var remainingStock = await db.Variants
+                    .Where(v => v.Id == variantId)
+                    .Select(v => (int?)v.StockQuantity)
+                    .FirstOrDefaultAsync(ct) ?? 0;
+
+                throw new InvalidOperationException(
+                    $"Khong du ton kho cho SKU {sku}. Chi con {remainingStock} san pham co san.");
             }
 
             var reservation = new StockReservation
@@ -72,12 +85,14 @@ public class StockReservationService(
         }
 
         await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
 
         logger.LogInformation(
             "Reserved stock for session {SessionKey}: {Count} items, expires at {ExpiresAt}",
-            sessionKey, items.Count, expiresAt);
+            sessionKey, requestedItems.Count, expiresAt);
 
-        // Tell the cleanup background service to start checking again
+        // Tell the cleanup background service to start checking again.
         BackgroundServices.StockReservationCleanupService.RequireCheck = true;
 
         return reservationIds;
@@ -95,21 +110,8 @@ public class StockReservationService(
             return;
         }
 
-        // Deduct actual stock and confirm reservations
-        var variantIds = reservations.Select(r => r.VariantId).Distinct().ToList();
-        var variants = await db.Variants
-            .Where(v => variantIds.Contains(v.Id))
-            .ToListAsync(ct);
-
         foreach (var reservation in reservations)
         {
-            var variant = variants.FirstOrDefault(v => v.Id == reservation.VariantId);
-            if (variant is not null)
-            {
-                variant.StockQuantity -= reservation.Quantity;
-                if (variant.StockQuantity < 0) variant.StockQuantity = 0;
-            }
-
             reservation.Status = StockReservationStatus.Confirmed;
             reservation.OrderId = orderId;
         }
@@ -127,18 +129,25 @@ public class StockReservationService(
             .Where(r => r.SessionKey == sessionKey && r.Status == StockReservationStatus.Reserved)
             .ToListAsync(ct);
 
+        if (reservations.Count == 0)
+            return;
+
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
+
         foreach (var reservation in reservations)
         {
             reservation.Status = StockReservationStatus.Released;
+            await IncrementStockAsync(reservation.VariantId, reservation.Quantity, ct);
         }
 
-        if (reservations.Count > 0)
-        {
-            await db.SaveChangesAsync(ct);
-            logger.LogInformation(
-                "Released {Count} reservations for session {SessionKey}",
-                reservations.Count, sessionKey);
-        }
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
+
+        logger.LogInformation(
+            "Released {Count} reservations for session {SessionKey}",
+            reservations.Count, sessionKey);
     }
 
     public async Task RestoreConfirmedReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
@@ -152,23 +161,18 @@ public class StockReservationService(
         if (reservations.Count == 0)
             return;
 
-        var variantIds = reservations.Select(r => r.VariantId).Distinct().ToList();
-        var variants = await db.Variants
-            .Where(v => variantIds.Contains(v.Id))
-            .ToListAsync(ct);
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
         foreach (var reservation in reservations)
         {
-            var variant = variants.FirstOrDefault(v => v.Id == reservation.VariantId);
-            if (variant is not null)
-            {
-                variant.StockQuantity += reservation.Quantity;
-            }
-
             reservation.Status = StockReservationStatus.Released;
+            await IncrementStockAsync(reservation.VariantId, reservation.Quantity, ct);
         }
 
         await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
 
         logger.LogInformation(
             "Restored stock for {Count} confirmed reservations from order {OrderId}",
@@ -183,18 +187,33 @@ public class StockReservationService(
             .Where(r => r.Status == StockReservationStatus.Reserved && r.ExpiresAt <= now)
             .ToListAsync(ct);
 
-        if (expiredReservations.Count == 0) return 0;
+        if (expiredReservations.Count == 0)
+            return 0;
+
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
         foreach (var reservation in expiredReservations)
         {
             reservation.Status = StockReservationStatus.Released;
+            await IncrementStockAsync(reservation.VariantId, reservation.Quantity, ct);
         }
 
         await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
 
         logger.LogInformation(
             "Cleaned up {Count} expired stock reservations", expiredReservations.Count);
 
         return expiredReservations.Count;
+    }
+
+    private Task<int> IncrementStockAsync(Guid variantId, int quantity, CancellationToken ct)
+    {
+        return db.Variants
+            .Where(v => v.Id == variantId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(v => v.StockQuantity, v => v.StockQuantity + quantity), ct);
     }
 }

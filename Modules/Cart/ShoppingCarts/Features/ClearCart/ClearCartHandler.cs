@@ -25,7 +25,7 @@ internal class ClearCartHandler(CartDbContext db, ICacheInvalidator cacheInvalid
     {
         var cart = await db.ShoppingCarts
             .Include(c => c.Items)
-            .FirstOrDefaultAsync(c => c.Id == cmd.CartId, ct);
+            .FirstOrDefaultAsync(c => c.Id == cmd.CartId && c.Status == CartStatus.Active, ct);
 
         if (cart is null)
             return new ClearCartResult(false);

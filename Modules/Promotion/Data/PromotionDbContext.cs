@@ -65,6 +65,7 @@ public class PromotionDbContext(
         modelBuilder.Entity<VoucherUsage>(entity =>
         {
             entity.HasKey(u => u.Id);
+            entity.HasIndex(u => new { u.OrderId, u.VoucherId }).IsUnique();
             entity.HasIndex(u => new { u.VoucherId, u.CustomerId });
             entity.HasIndex(u => u.OrderId);
             entity.Property(u => u.DiscountApplied).HasPrecision(18, 2);

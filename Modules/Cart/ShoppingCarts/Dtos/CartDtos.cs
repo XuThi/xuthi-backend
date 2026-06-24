@@ -10,6 +10,7 @@ public record CartDto(
     decimal Subtotal,
     decimal VoucherDiscount,
     string? AppliedVoucherCode,
+    bool WaivesShipping,
     decimal Total,
     int TotalItems);
 

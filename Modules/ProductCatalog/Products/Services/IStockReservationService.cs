@@ -6,7 +6,7 @@ public interface IStockReservationService
 {
     /// <summary>
     /// Reserve stock for a list of variant-quantity pairs. Returns reservation IDs.
-    /// Deducts StockQuantity immediately; on expiry, the cleanup job releases them.
+    /// Atomically deducts StockQuantity immediately; on expiry, the cleanup job releases it.
     /// </summary>
     Task<List<Guid>> ReserveStockAsync(
         string sessionKey,
@@ -15,8 +15,8 @@ public interface IStockReservationService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Confirm reservations when an order is placed. Marks them as Confirmed so
-    /// the cleanup job won't release them.
+    /// Confirm reservations after payment/order commitment. Stock has already been held,
+    /// so this only marks reservations as Confirmed and links them to the order.
     /// </summary>
     Task ConfirmReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default);
 

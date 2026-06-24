@@ -1,5 +1,6 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
+using Cart.ShoppingCarts.Services;
 
 using Core.Caching;
 
@@ -19,14 +20,17 @@ public class RemoveVoucherCommandValidator : AbstractValidator<RemoveVoucherComm
 }
 
 // Handler
-internal class RemoveVoucherHandler(CartDbContext db, ICacheInvalidator cacheInvalidator)
+internal class RemoveVoucherHandler(
+    CartDbContext db,
+    CartQuoteService quoteService,
+    ICacheInvalidator cacheInvalidator)
     : ICommandHandler<RemoveVoucherCommand, RemoveVoucherResult>
 {
     public async Task<RemoveVoucherResult> Handle(RemoveVoucherCommand cmd, CancellationToken ct)
     {
         var cart = await db.ShoppingCarts
             .Include(c => c.Items)
-            .FirstOrDefaultAsync(c => c.Id == cmd.CartId, ct);
+            .FirstOrDefaultAsync(c => c.Id == cmd.CartId && c.Status == CartStatus.Active, ct);
 
         if (cart is null)
             return new RemoveVoucherResult(false, null);
@@ -34,6 +38,7 @@ internal class RemoveVoucherHandler(CartDbContext db, ICacheInvalidator cacheInv
         cart.AppliedVoucherId = null;
         cart.AppliedVoucherCode = null;
         cart.VoucherDiscount = 0;
+        var quote = await quoteService.RefreshQuoteAsync(cart, requirePurchasable: false, requireVoucherValid: false, ct);
         cart.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);
@@ -41,17 +46,6 @@ internal class RemoveVoucherHandler(CartDbContext db, ICacheInvalidator cacheInv
         // Invalidate cart cache
         cacheInvalidator.Invalidate(CacheKeys.Cart);
 
-        return new RemoveVoucherResult(true, MapToDto(cart));
+        return new RemoveVoucherResult(true, CartMapper.ToDto(cart, quote.WaivesShipping));
     }
-
-    private static CartDto MapToDto(ShoppingCart cart) => new(
-        cart.Id, cart.SessionId, cart.CustomerId,
-        cart.Items.Select(i => new CartItemDto(
-            i.Id, i.ProductId, i.VariantId,
-            i.ProductName, i.VariantSku, i.VariantDescription, i.ImageUrl,
-            i.UnitPrice, i.CompareAtPrice, i.Quantity, i.TotalPrice,
-            i.AvailableStock, i.IsInStock, i.IsOnSale
-        )).ToList(),
-        cart.Subtotal, cart.VoucherDiscount, cart.AppliedVoucherCode, cart.Total, cart.TotalItems
-    );
 }

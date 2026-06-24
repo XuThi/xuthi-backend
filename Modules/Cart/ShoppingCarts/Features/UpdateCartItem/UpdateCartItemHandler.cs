@@ -1,9 +1,9 @@
 using Cart.Data;
 using Cart.ShoppingCarts.Models;
-using ProductCatalog.Data;
-using Promotion.Data;
+using Cart.ShoppingCarts.Services;
 
 using Core.Caching;
+using ProductCatalog.Products.Features.GetCartItemFacts;
 
 namespace Cart.ShoppingCarts.Features.UpdateCartItem;
 
@@ -15,8 +15,8 @@ public record UpdateCartItemResult(bool Success, CartDto? Cart, string? ErrorMes
 /// </summary>
 internal class UpdateCartItemHandler(
     CartDbContext cartDb,
-    ProductCatalogDbContext catalogDb,
-    PromotionDbContext promotionDb,
+    ISender sender,
+    CartQuoteService quoteService,
     ICacheInvalidator cacheInvalidator)
     : ICommandHandler<UpdateCartItemCommand, UpdateCartItemResult>
 {
@@ -24,7 +24,7 @@ internal class UpdateCartItemHandler(
     {
         var cart = await cartDb.ShoppingCarts
             .Include(c => c.Items)
-            .FirstOrDefaultAsync(c => c.Id == cmd.CartId, ct);
+            .FirstOrDefaultAsync(c => c.Id == cmd.CartId && c.Status == CartStatus.Active, ct);
 
         if (cart is null)
             return new UpdateCartItemResult(false, null, "Cart not found");
@@ -33,11 +33,11 @@ internal class UpdateCartItemHandler(
         if (item is null)
             return new UpdateCartItemResult(false, null, "Item not in cart");
 
-        // Get variant for current price
-        var variant = await catalogDb.Variants
-            .FirstOrDefaultAsync(v => v.Id == cmd.VariantId && !v.IsDeleted, ct);
+        var fact = (await sender.Send(new GetCartItemFactsQuery([cmd.VariantId]), ct))
+            .Items
+            .FirstOrDefault(i => i.VariantId == cmd.VariantId);
 
-        if (variant is null)
+        if (fact is null || !fact.IsAvailable)
             return new UpdateCartItemResult(false, null, "Variant no longer exists");
 
         if (cmd.Quantity <= 0)
@@ -47,64 +47,20 @@ internal class UpdateCartItemHandler(
         }
         else
         {
+            if (cmd.Quantity > fact.StockQuantity)
+                return new UpdateCartItemResult(false, null, $"Không đủ tồn kho. Chỉ còn {fact.StockQuantity} sản phẩm.");
+
             item.Quantity = cmd.Quantity;
-            item.AvailableStock = 10; // Default stock
-            var (unitPrice, compareAtPrice) = await ResolveSalePrice(
-                item.ProductId,
-                item.VariantId,
-                variant.Price,
-                ct);
-            item.UnitPrice = unitPrice;
-            item.CompareAtPrice = compareAtPrice;
             item.UpdatedAt = DateTime.UtcNow;
         }
 
+        var quote = await quoteService.RefreshQuoteAsync(cart, requirePurchasable: false, requireVoucherValid: false, ct);
         cart.UpdatedAt = DateTime.UtcNow;
         await cartDb.SaveChangesAsync(ct);
 
         // Invalidate cart cache
         cacheInvalidator.Invalidate(CacheKeys.Cart);
 
-        return new UpdateCartItemResult(true, MapToDto(cart), null);
-    }
-
-    private static CartDto MapToDto(ShoppingCart cart) => new(
-        cart.Id, cart.SessionId, cart.CustomerId,
-        cart.Items.Select(i => new CartItemDto(
-            i.Id, i.ProductId, i.VariantId,
-            i.ProductName, i.VariantSku, i.VariantDescription, i.ImageUrl,
-            i.UnitPrice, i.CompareAtPrice, i.Quantity, i.TotalPrice,
-            i.AvailableStock, i.IsInStock, i.IsOnSale
-        )).ToList(),
-        cart.Subtotal, cart.VoucherDiscount, cart.AppliedVoucherCode, cart.Total, cart.TotalItems
-    );
-
-    private async Task<(decimal UnitPrice, decimal? CompareAtPrice)> ResolveSalePrice(
-        Guid productId,
-        Guid variantId,
-        decimal basePrice,
-        CancellationToken ct)
-    {
-        var now = DateTime.UtcNow;
-        var saleItem = await promotionDb.SaleCampaignItems
-            .Include(i => i.SaleCampaign)
-            .Where(i => i.ProductId == productId && (i.VariantId == null || i.VariantId == variantId))
-            .Where(i => i.SaleCampaign.IsActive && i.SaleCampaign.StartDate <= now && i.SaleCampaign.EndDate >= now)
-            .OrderByDescending(i => i.VariantId.HasValue)
-            .ThenBy(i => i.SalePrice)
-            .FirstOrDefaultAsync(ct);
-
-        if (saleItem is null)
-        {
-            return (basePrice, null);
-        }
-
-        var original = saleItem.OriginalPrice ?? basePrice;
-        if (original < saleItem.SalePrice)
-        {
-            original = basePrice;
-        }
-
-        return (saleItem.SalePrice, original);
+        return new UpdateCartItemResult(true, CartMapper.ToDto(cart, quote.WaivesShipping), null);
     }
 }

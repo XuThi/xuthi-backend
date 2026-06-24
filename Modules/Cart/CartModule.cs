@@ -1,4 +1,5 @@
 using Cart.Data;
+using Cart.ShoppingCarts.Services;
 using Core.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -19,6 +20,7 @@ public static class CartModule
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         builder.EnrichNpgsqlDbContext<CartDbContext>();
+        builder.Services.AddScoped<CartQuoteService>();
         return builder;
     }
 }
