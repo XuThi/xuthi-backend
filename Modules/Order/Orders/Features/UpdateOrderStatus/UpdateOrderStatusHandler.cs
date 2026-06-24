@@ -2,6 +2,7 @@ using Customer.Data;
 using Customer.Customers.Features.AddCustomerOrder;
 using Customer.Customers.Models;
 using ProductCatalog.Products.Services;
+using Promotion.Vouchers.Features.ManageVoucherUsage;
 
 namespace Order.Orders.Features.UpdateOrderStatus;
 
@@ -50,6 +51,13 @@ internal class UpdateOrderStatusHandler(
             {
                 await stockReservation.ReleaseReservationsAsync(order.ReservationSessionKey, cancellationToken);
                 await stockReservation.RestoreConfirmedReservationsAsync(order.ReservationSessionKey, order.Id, cancellationToken);
+            }
+
+            if (order.VoucherId.HasValue && order.CreatedOrderAt is null)
+            {
+                await sender.Send(new ReleaseVoucherUsageCommand(
+                    order.VoucherId.Value,
+                    order.Id), cancellationToken);
             }
 
             await ReverseCustomerOrderStatsIfAwarded(order, cancellationToken);

@@ -1,4 +1,5 @@
 using ProductCatalog.Products.Services;
+using Promotion.Vouchers.Features.ManageVoucherUsage;
 
 namespace Order.Orders.Features.CancelPendingPayOsOrder;
 
@@ -20,7 +21,8 @@ public record CancelPendingPayOsOrderResult(
 
 internal class CancelPendingPayOsOrderHandler(
     OrderDbContext orderDb,
-    IStockReservationService stockReservation)
+    IStockReservationService stockReservation,
+    ISender sender)
     : ICommandHandler<CancelPendingPayOsOrderCommand, CancelPendingPayOsOrderResult>
 {
     public async Task<CancelPendingPayOsOrderResult> Handle(
@@ -53,6 +55,13 @@ internal class CancelPendingPayOsOrderHandler(
         {
             await stockReservation.ReleaseReservationsAsync(order.ReservationSessionKey, cancellationToken);
             await stockReservation.RestoreConfirmedReservationsAsync(order.ReservationSessionKey, order.Id, cancellationToken);
+        }
+
+        if (order.VoucherId.HasValue && order.CreatedOrderAt is null)
+        {
+            await sender.Send(new ReleaseVoucherUsageCommand(
+                order.VoucherId.Value,
+                order.Id), cancellationToken);
         }
 
         await orderDb.SaveChangesAsync(cancellationToken);

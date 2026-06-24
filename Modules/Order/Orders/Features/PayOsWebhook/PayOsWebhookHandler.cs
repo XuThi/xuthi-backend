@@ -3,6 +3,7 @@ using Order.Orders.Events;
 using Order.Orders.Services;
 using PayOS.Models.Webhooks;
 using ProductCatalog.Products.Services;
+using Promotion.Vouchers.Features.ManageVoucherUsage;
 
 namespace Order.Orders.Features.PayOsWebhook;
 
@@ -12,7 +13,8 @@ public record PayOsWebhookResult(bool Accepted = true);
 internal class PayOsWebhookHandler(
     OrderDbContext orderDb,
     IPaymentService paymentService,
-    IStockReservationService stockReservation)
+    IStockReservationService stockReservation,
+    ISender sender)
     : ICommandHandler<PayOsWebhookCommand, PayOsWebhookResult>
 {
     public async Task<PayOsWebhookResult> Handle(PayOsWebhookCommand command, CancellationToken cancellationToken)
@@ -57,6 +59,15 @@ internal class PayOsWebhookHandler(
                     order.ReservationSessionKey, order.Id, cancellationToken);
             }
 
+            if (order.VoucherId.HasValue)
+            {
+                await sender.Send(new FinalizeVoucherUsageCommand(
+                    order.VoucherId.Value,
+                    order.Id), cancellationToken);
+            }
+
+            order.CreatedOrderAt ??= DateTime.UtcNow;
+
             // Notify customer + owner only after payment is confirmed.
             order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
         }
@@ -71,6 +82,13 @@ internal class PayOsWebhookHandler(
             if (!string.IsNullOrEmpty(order.ReservationSessionKey))
             {
                 await stockReservation.ReleaseReservationsAsync(order.ReservationSessionKey, cancellationToken);
+            }
+
+            if (order.VoucherId.HasValue)
+            {
+                await sender.Send(new ReleaseVoucherUsageCommand(
+                    order.VoucherId.Value,
+                    order.Id), cancellationToken);
             }
         }
 

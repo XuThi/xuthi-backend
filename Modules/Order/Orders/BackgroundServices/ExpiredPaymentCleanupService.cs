@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ProductCatalog.Products.Services;
+using Promotion.Vouchers.Features.ManageVoucherUsage;
 
 namespace Order.Orders.BackgroundServices;
 
@@ -62,6 +63,7 @@ public class ExpiredPaymentCleanupService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
         var stockReservation = scope.ServiceProvider.GetRequiredService<IStockReservationService>();
+        var sender = scope.ServiceProvider.GetRequiredService<ISender>();
 
         var cutoff = DateTime.UtcNow - PaymentExpiry;
 
@@ -92,6 +94,18 @@ public class ExpiredPaymentCleanupService(
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Failed to release stock for expired order {OrderNumber}", order.OrderNumber);
+                }
+            }
+
+            if (order.VoucherId.HasValue)
+            {
+                try
+                {
+                    await sender.Send(new ReleaseVoucherUsageCommand(order.VoucherId.Value, order.Id), ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to release voucher hold for expired order {OrderNumber}", order.OrderNumber);
                 }
             }
 

@@ -69,6 +69,7 @@ public class PromotionDbContext(
             entity.HasIndex(u => new { u.VoucherId, u.CustomerId });
             entity.HasIndex(u => u.OrderId);
             entity.Property(u => u.DiscountApplied).HasPrecision(18, 2);
+            entity.Property(u => u.Status).HasConversion<int>();
 
             entity.HasOne(u => u.Voucher)
                 .WithMany()

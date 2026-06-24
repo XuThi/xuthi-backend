@@ -13,11 +13,23 @@ internal class RedeemVoucherHandler(PromotionDbContext db)
 {
     public async Task<RedeemVoucherResult> Handle(RedeemVoucherCommand command, CancellationToken ct)
     {
-        var alreadyRedeemed = await db.VoucherUsages
-            .AnyAsync(u => u.OrderId == command.OrderId && u.VoucherId == command.VoucherId, ct);
+        var existingUsage = await db.VoucherUsages
+            .SingleOrDefaultAsync(u => u.OrderId == command.OrderId && u.VoucherId == command.VoucherId, ct);
 
-        if (alreadyRedeemed)
+        if (existingUsage is not null)
+        {
+            if (existingUsage.Status == VoucherUsageStatus.Released)
+                throw new InvalidOperationException("Released voucher hold cannot be finalized");
+
+            if (existingUsage.Status == VoucherUsageStatus.Held)
+            {
+                existingUsage.Status = VoucherUsageStatus.Finalized;
+                existingUsage.FinalizedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+            }
+
             return new RedeemVoucherResult(true);
+        }
 
         var voucher = await db.Vouchers.FirstOrDefaultAsync(v => v.Id == command.VoucherId, ct)
             ?? throw new InvalidOperationException("Voucher not found");
@@ -35,7 +47,9 @@ internal class RedeemVoucherHandler(PromotionDbContext db)
             CustomerId = command.CustomerId,
             OrderId = command.OrderId,
             DiscountApplied = command.DiscountApplied,
-            UsedAt = DateTime.UtcNow
+            UsedAt = DateTime.UtcNow,
+            Status = VoucherUsageStatus.Finalized,
+            FinalizedAt = DateTime.UtcNow
         });
 
         try
@@ -46,7 +60,9 @@ internal class RedeemVoucherHandler(PromotionDbContext db)
         {
             var redeemedByRetry = await db.VoucherUsages
                 .AsNoTracking()
-                .AnyAsync(u => u.OrderId == command.OrderId && u.VoucherId == command.VoucherId, ct);
+                .AnyAsync(u => u.OrderId == command.OrderId
+                    && u.VoucherId == command.VoucherId
+                    && u.Status != VoucherUsageStatus.Released, ct);
 
             if (redeemedByRetry)
             {

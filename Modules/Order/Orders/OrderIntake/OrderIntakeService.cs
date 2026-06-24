@@ -4,7 +4,7 @@ using Order.Orders.Events;
 using Order.Orders.Features.CalculateShipping;
 using Order.Orders.Services;
 using ProductCatalog.Products.Services;
-using Promotion.Vouchers.Features.RedeemVoucher;
+using Promotion.Vouchers.Features.ManageVoucherUsage;
 
 namespace Order.Orders.OrderIntake;
 
@@ -131,7 +131,7 @@ internal class OrderIntake(
         {
             if (order.VoucherId.HasValue)
             {
-                await sender.Send(new RedeemVoucherCommand(
+                await sender.Send(new HoldVoucherUsageCommand(
                     order.VoucherId.Value,
                     quote.CustomerId,
                     order.Id,
@@ -151,6 +151,14 @@ internal class OrderIntake(
         if (request.PaymentMethod is PaymentMethod.CashOnDelivery or PaymentMethod.BankTransfer)
         {
             await stockReservation.ConfirmReservationsAsync(sessionKey, order.Id, cancellationToken);
+
+            if (order.VoucherId.HasValue)
+            {
+                await sender.Send(new FinalizeVoucherUsageCommand(
+                    order.VoucherId.Value,
+                    order.Id), cancellationToken);
+            }
+
             order.CreatedOrderAt ??= DateTime.UtcNow;
             order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
             await orderDb.SaveChangesAsync(cancellationToken);

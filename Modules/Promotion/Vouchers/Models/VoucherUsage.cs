@@ -13,7 +13,17 @@ public class VoucherUsage : Entity<Guid>
     public Guid OrderId { get; set; }
     public decimal DiscountApplied { get; set; }
     public DateTime UsedAt { get; set; } = DateTime.UtcNow;
+    public VoucherUsageStatus Status { get; set; } = VoucherUsageStatus.Held;
+    public DateTime? FinalizedAt { get; set; }
+    public DateTime? ReleasedAt { get; set; }
 
     // Navigation
     public Voucher Voucher { get; set; } = null!;
+}
+
+public enum VoucherUsageStatus
+{
+    Held = 1,
+    Finalized = 2,
+    Released = 3
 }

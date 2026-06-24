@@ -66,7 +66,9 @@ internal class ValidateVoucherHandler(PromotionDbContext db)
                     "Bạn cần đăng nhập để sử dụng mã giảm giá này", null, null, 0);
 
             var customerUsageCount = await db.VoucherUsages
-                .CountAsync(u => u.VoucherId == voucher.Id && u.CustomerId == query.CustomerId, ct);
+                .CountAsync(u => u.VoucherId == voucher.Id
+                    && u.CustomerId == query.CustomerId
+                    && u.Status != VoucherUsageStatus.Released, ct);
             
             if (customerUsageCount >= voucher.MaxUsagePerCustomer)
                 return new ValidateVoucherResult(false, 
