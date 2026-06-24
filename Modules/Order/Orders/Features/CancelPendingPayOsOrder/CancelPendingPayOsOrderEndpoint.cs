@@ -4,8 +4,6 @@ using System.Security.Claims;
 
 namespace Order.Orders.Features.CancelPendingPayOsOrder;
 
-// TODO: Fuck this shit up
-
 public record CancelPendingPayOsOrderRequest(string? Reason = null);
 public record CancelPendingPayOsOrderResponse(
     Guid OrderId,
@@ -49,8 +47,8 @@ public class CancelPendingPayOsOrderEndpoint : ICarterModule
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status404NotFound)
-        .WithSummary("Cancel pending order")
-        .WithDescription("Cancel a pending order that belongs to the authenticated customer before admin confirmation")
+        .WithSummary("Cancel pending PayOS order attempt")
+        .WithDescription("Cancel an owned, uncreated PayOS order attempt before payment succeeds")
         .WithTags("Orders")
         .RequireAuthorization("Authenticated");
 
@@ -61,7 +59,7 @@ public class CancelPendingPayOsOrderEndpoint : ICarterModule
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .WithSummary("Cancel pending PayOS order")
-        .WithDescription("Compatibility route for cancelling pending PayOS orders")
+        .WithDescription("Compatibility route for cancelling owned, uncreated PayOS order attempts")
         .WithTags("Orders")
         .RequireAuthorization("Authenticated");
     }

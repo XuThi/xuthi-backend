@@ -267,6 +267,174 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
+    public async Task Customer_can_cancel_owned_uncreated_PayOS_order_attempt_through_order_intake()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYCANCEL10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-customer-cancel-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYCANCEL10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paycancel10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        var cancelled = await app.OrderIntake.CancelOrderAttemptAsync(new CancelOrderAttempt(
+            checkout.OrderId,
+            RequestUserId: null,
+            RequestEmail: "jane@example.com",
+            Reason: "Changed mind"));
+
+        Assert.Equal(checkout.OrderId, cancelled.OrderId);
+        Assert.Equal("Cancelled", cancelled.Status);
+        Assert.Equal("Failed", cancelled.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, cancelled.CancelledAt);
+        Assert.Equal("Changed mind", cancelled.CancellationReason);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, order.CancelledAt);
+        Assert.Equal("Changed mind", order.CancellationReason);
+        Assert.Null(order.CreatedOrderAt);
+        Assert.Null(order.PaidAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+        Assert.NotNull(usage.ReleasedAt);
+
+        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task Customer_cannot_cancel_unowned_PayOS_order_attempt()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-unauthorized-cancel-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            app.Sender.Send(new CancelPendingPayOsOrderCommand(
+                checkout.OrderId,
+                RequestUserId: null,
+                RequestEmail: "intruder@example.com",
+                Reason: "Not mine")));
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Pending", order.Status);
+        Assert.Equal("Pending", order.PaymentStatus);
+        Assert.Null(order.CancelledAt);
+        Assert.Null(order.CancellationReason);
+
+        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task Customer_cannot_cancel_PayOS_attempt_after_it_becomes_created_order()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-created-order-cancel-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.OrderIntake.CancelOrderAttemptAsync(new CancelOrderAttempt(
+                checkout.OrderId,
+                RequestUserId: null,
+                RequestEmail: "jane@example.com",
+                Reason: "Changed mind")));
+
+        Assert.Contains("Created Orders", ex.Message);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Confirmed", order.Status);
+        Assert.Equal("Paid", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
+        Assert.Equal(now.UtcDateTime, order.PaidAt);
+        Assert.Null(order.CancelledAt);
+        Assert.Null(order.CancellationReason);
+
+        Assert.Single(app.StockConfirmations);
+        Assert.Empty(app.StockReleases);
+        Assert.Single(app.CreatedOrderEvents);
+    }
+
+    [Fact]
     public async Task PayOS_webhook_with_unknown_order_code_is_acknowledged_without_local_state_changes()
     {
         await using var app = new CommerceTestApp();

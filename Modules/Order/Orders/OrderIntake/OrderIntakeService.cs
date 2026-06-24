@@ -18,6 +18,10 @@ public interface IOrderIntake
     Task<ResolvePayOsPaymentResultResult> ResolvePayOsPaymentResultAsync(
         PayOsPaymentResult result,
         CancellationToken cancellationToken = default);
+
+    Task<CancelOrderAttemptResult> CancelOrderAttemptAsync(
+        CancelOrderAttempt request,
+        CancellationToken cancellationToken = default);
 }
 
 public record StartOrderAttempt(
@@ -41,6 +45,20 @@ public record StartOrderAttemptResult(
     decimal Total,
     string Status,
     string? PaymentUrl = null);
+
+public record CancelOrderAttempt(
+    Guid OrderId,
+    Guid? RequestUserId,
+    string? RequestEmail,
+    string? Reason = null);
+
+public record CancelOrderAttemptResult(
+    Guid OrderId,
+    string OrderNumber,
+    string Status,
+    string PaymentStatus,
+    DateTime CancelledAt,
+    string? CancellationReason);
 
 public record PayOsPaymentResult(
     long OrderCode,
@@ -364,6 +382,44 @@ internal class OrderIntake(
         return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Confirmed);
     }
 
+    public async Task<CancelOrderAttemptResult> CancelOrderAttemptAsync(
+        CancelOrderAttempt request,
+        CancellationToken cancellationToken = default)
+    {
+        var order = await orderDb.Orders
+            .FirstOrDefaultAsync(o => o.Id == request.OrderId, cancellationToken);
+
+        if (order is null)
+            throw new KeyNotFoundException("Order not found");
+
+        if (!IsOrderOwner(order, request.RequestUserId, request.RequestEmail))
+            throw new UnauthorizedAccessException("Ban khong co quyen huy don hang nay.");
+
+        if (order.PaymentMethod != PaymentMethod.PayOS)
+            throw new InvalidOperationException("Order Intake cancellation only applies to PayOS Order Attempts.");
+
+        if (order.CreatedOrderAt is not null)
+            throw new InvalidOperationException("Created Orders must be cancelled through the broader order workflow.");
+
+        if (order.Status != OrderStatus.Pending || order.PaymentStatus != PaymentStatus.Pending)
+            throw new InvalidOperationException("Don hang PayOS khong con o trang thai cho thanh toan de huy.");
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var reason = string.IsNullOrWhiteSpace(request.Reason)
+            ? "Khach huy don hang truoc khi xac nhan"
+            : request.Reason;
+
+        await FailPayOsOrderAttemptAsync(order, now, reason, cancellationToken);
+
+        return new CancelOrderAttemptResult(
+            order.Id,
+            order.OrderNumber,
+            order.Status.ToString(),
+            order.PaymentStatus.ToString(),
+            order.CancelledAt ?? now,
+            order.CancellationReason);
+    }
+
     private async Task FailPayOsOrderAttemptAsync(
         CustomerOrder order,
         DateTime now,
@@ -393,6 +449,18 @@ internal class OrderIntake(
         }
 
         await orderDb.SaveChangesAsync(cancellationToken);
+    }
+
+    private static bool IsOrderOwner(CustomerOrder order, Guid? requestUserId, string? requestEmail)
+    {
+        if (order.CustomerId.HasValue && requestUserId.HasValue && order.CustomerId.Value == requestUserId.Value)
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(requestEmail)
+            && string.Equals(order.CustomerEmail, requestEmail, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
     }
 
     private static bool IsAfterSettlementGrace(CustomerOrder order, DateTime now)
