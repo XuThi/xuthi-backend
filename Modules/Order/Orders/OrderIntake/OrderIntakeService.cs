@@ -1,5 +1,6 @@
 using Cart.ShoppingCarts.Features.QuoteAndConsumeCart;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Order.Orders.Events;
 using Order.Orders.Features.CalculateShipping;
 using Order.Orders.Services;
@@ -41,6 +42,9 @@ public static class OrderIntakeServiceCollectionExtensions
 {
     public static IServiceCollection AddOrderIntake(this IServiceCollection services)
     {
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(OrderIntakePaymentWindowPolicy.Default);
+
         return services.AddScoped<IOrderIntake, OrderIntake>();
     }
 }
@@ -49,13 +53,35 @@ internal class OrderIntake(
     OrderDbContext orderDb,
     IStockReservationService stockReservation,
     IPaymentService paymentService,
-    ISender sender)
+    ISender sender,
+    TimeProvider timeProvider,
+    OrderIntakePaymentWindowPolicy paymentWindowPolicy)
     : IOrderIntake
 {
     public async Task<StartOrderAttemptResult> StartOrderAttemptAsync(
         StartOrderAttempt request,
         CancellationToken cancellationToken = default)
     {
+        var now = timeProvider.GetUtcNow();
+
+        if (request.PaymentMethod == PaymentMethod.PayOS)
+        {
+            var existingAttempt = await FindPayOsAttemptForCartAsync(
+                request.CartId,
+                cancellationToken);
+
+            if (existingAttempt is not null)
+            {
+                if (CanReusePayOsAttempt(existingAttempt, now.UtcDateTime))
+                {
+                    return ToStartResult(existingAttempt);
+                }
+
+                throw new InvalidOperationException(
+                    "Payment Window is no longer live for this Order Attempt. Return to the cart for a fresh Cart Quote.");
+            }
+        }
+
         var quote = (await sender.Send(
             new QuoteCartForCheckoutCommand(request.CartId, request.CustomerId),
             cancellationToken)).Quote;
@@ -88,6 +114,13 @@ internal class OrderIntake(
         var discountAmount = quote.VoucherDiscount;
         var total = subtotal - discountAmount + shippingFee;
 
+        var paymentWindowExpiresAt = request.PaymentMethod == PaymentMethod.PayOS
+            ? paymentWindowPolicy.GetPaymentWindowEnd(now)
+            : (DateTimeOffset?)null;
+        var paymentSettlementGraceEndsAt = paymentWindowExpiresAt.HasValue
+            ? paymentWindowPolicy.GetSettlementGraceEnd(paymentWindowExpiresAt.Value)
+            : (DateTimeOffset?)null;
+
         var order = new CustomerOrder
         {
             Id = Guid.NewGuid(),
@@ -115,13 +148,21 @@ internal class OrderIntake(
             Items = orderItems
         };
 
+        if (request.PaymentMethod == PaymentMethod.PayOS)
+        {
+            order.PaymentWindowExpiresAt = paymentWindowExpiresAt!.Value.UtcDateTime;
+            order.PaymentSettlementGraceEndsAt = paymentSettlementGraceEndsAt!.Value.UtcDateTime;
+        }
+
         var sessionKey = $"order:{order.Id}";
         order.ReservationSessionKey = sessionKey;
 
         await stockReservation.ReserveStockAsync(
             sessionKey,
             quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
-            TimeSpan.FromMinutes(5),
+            request.PaymentMethod == PaymentMethod.PayOS
+                ? paymentWindowPolicy.PaymentWindow
+                : null,
             cancellationToken);
 
         orderDb.Orders.Add(order);
@@ -159,7 +200,7 @@ internal class OrderIntake(
                     order.Id), cancellationToken);
             }
 
-            order.CreatedOrderAt ??= DateTime.UtcNow;
+            order.CreatedOrderAt ??= timeProvider.GetUtcNow().UtcDateTime;
             order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
             await orderDb.SaveChangesAsync(cancellationToken);
         }
@@ -176,9 +217,11 @@ internal class OrderIntake(
                 order.Id);
 
             var payResult = await paymentService.CreatePaymentLinkAsync(
-                order, returnUrl, cancelUrl, cancellationToken);
+                order, returnUrl, cancelUrl, paymentWindowExpiresAt!.Value, cancellationToken);
 
             order.PayOsOrderCode = payResult.OrderCode;
+            order.PaymentLinkId = payResult.PaymentLinkId;
+            order.PaymentLinkUrl = payResult.CheckoutUrl;
             paymentUrl = payResult.CheckoutUrl;
 
             await orderDb.SaveChangesAsync(cancellationToken);
@@ -192,6 +235,38 @@ internal class OrderIntake(
             order.Total,
             order.Status.ToString(),
             paymentUrl);
+    }
+
+    private async Task<CustomerOrder?> FindPayOsAttemptForCartAsync(
+        Guid cartId,
+        CancellationToken cancellationToken)
+    {
+        return await orderDb.Orders
+            .OrderByDescending(o => o.CreatedAt)
+            .FirstOrDefaultAsync(o =>
+                o.SourceCartId == cartId
+                && o.PaymentMethod == PaymentMethod.PayOS,
+                cancellationToken);
+    }
+
+    private static bool CanReusePayOsAttempt(CustomerOrder order, DateTime now)
+    {
+        return order.Status == OrderStatus.Pending
+            && order.PaymentStatus == PaymentStatus.Pending
+            && order.PaymentWindowExpiresAt is not null
+            && order.PaymentWindowExpiresAt > now
+            && order.PayOsOrderCode.HasValue
+            && !string.IsNullOrWhiteSpace(order.PaymentLinkUrl);
+    }
+
+    private static StartOrderAttemptResult ToStartResult(CustomerOrder order)
+    {
+        return new StartOrderAttemptResult(
+            order.Id,
+            order.OrderNumber,
+            order.Total,
+            order.Status.ToString(),
+            order.PaymentLinkUrl);
     }
 
     private static string AppendOrderIdToUrl(string url, Guid orderId)

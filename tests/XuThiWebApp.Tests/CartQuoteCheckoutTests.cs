@@ -20,6 +20,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Order.Orders.Events;
 using Order;
 using Order.Data;
 using Order.Orders.Features.Checkout;
@@ -988,7 +989,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     private readonly AsyncServiceScope _scope;
     private int _productCounter;
 
-    public CommerceTestApp()
+    public CommerceTestApp(
+        DateTimeOffset? utcNow = null,
+        OrderIntakePaymentWindowPolicy? paymentWindowPolicy = null)
     {
         var services = new ServiceCollection();
         var databaseName = $"commerce-tests-{Guid.NewGuid():N}";
@@ -998,6 +1001,13 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         services.AddSingleton<ICacheInvalidator, MemoryCacheInvalidator>();
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         services.AddSingleton(new HttpClient(new NoNetworkHttpMessageHandler()));
+        services.AddSingleton<ManualTimeProvider>(_ => new ManualTimeProvider(
+            utcNow ?? DateTimeOffset.UtcNow));
+        services.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<ManualTimeProvider>());
+        services.AddSingleton(paymentWindowPolicy ?? OrderIntakePaymentWindowPolicy.Default);
+        services.AddSingleton<TestOrderCreatedEventRecorder>();
+        services.AddSingleton<INotificationHandler<OrderCreatedEvent>>(sp =>
+            sp.GetRequiredService<TestOrderCreatedEventRecorder>());
 
         services.AddTestDbContext<CartDbContext>(databaseName);
         services.AddTestDbContext<CustomerDbContext>(databaseName);
@@ -1032,6 +1042,15 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public IReadOnlyList<StockConfirmation> StockConfirmations
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Confirmations;
+
+    public IReadOnlyList<StockReservationAttempt> StockReservations
+        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Reservations;
+
+    public IReadOnlyList<OrderCreatedEvent> CreatedOrderEvents
+        => _scope.ServiceProvider.GetRequiredService<TestOrderCreatedEventRecorder>().Events;
+
+    public ManualTimeProvider TimeProvider
+        => _scope.ServiceProvider.GetRequiredService<ManualTimeProvider>();
 
     public async Task<CatalogItem> SeedCatalogItemAsync(decimal price, int stockQuantity, Guid? categoryId = null)
     {
@@ -1220,7 +1239,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             .AsNoTracking()
             .SingleAsync(o => o.Id == orderId, ct);
 
-        return new OrderPaymentState(order.PayOsOrderCode);
+        return new OrderPaymentState(
+            order.PayOsOrderCode,
+            order.PaymentLinkId,
+            order.PaymentLinkUrl,
+            order.PaymentWindowExpiresAt,
+            order.PaymentSettlementGraceEndsAt);
     }
 
     public async ValueTask DisposeAsync()
@@ -1239,9 +1263,20 @@ internal sealed record CartState(
     string? AppliedVoucherCode,
     decimal VoucherDiscount);
 
-internal sealed record OrderPaymentState(long? PayOsOrderCode);
+internal sealed record OrderPaymentState(
+    long? PayOsOrderCode,
+    string? PaymentLinkId,
+    string? PaymentLinkUrl,
+    DateTime? PaymentWindowExpiresAt,
+    DateTime? PaymentSettlementGraceEndsAt);
 
 internal sealed record StockConfirmation(string SessionKey, Guid OrderId);
+internal sealed record StockReservationAttempt(
+    string SessionKey,
+    IReadOnlyList<StockReservationItem> Items,
+    TimeSpan? Ttl);
+
+internal sealed record StockReservationItem(Guid VariantId, int Quantity);
 
 internal sealed record PaymentLinkAttempt(
     Guid OrderId,
@@ -1253,6 +1288,7 @@ internal sealed record PaymentLinkAttempt(
     decimal Total,
     string ReturnUrl,
     string CancelUrl,
+    DateTimeOffset ExpiresAt,
     IReadOnlyList<PaymentLinkAttemptItem> Items);
 
 internal sealed record PaymentLinkAttemptItem(
@@ -1279,9 +1315,11 @@ internal static class TestServiceCollectionExtensions
 
 internal sealed class TestStockReservationService : IStockReservationService
 {
+    private readonly List<StockReservationAttempt> _reservations = [];
     private readonly List<StockConfirmation> _confirmations = [];
 
     public Func<CancellationToken, Task>? OnReserveAsync { get; set; }
+    public IReadOnlyList<StockReservationAttempt> Reservations => _reservations;
     public IReadOnlyList<StockConfirmation> Confirmations => _confirmations;
 
     public async Task<List<Guid>> ReserveStockAsync(
@@ -1292,6 +1330,11 @@ internal sealed class TestStockReservationService : IStockReservationService
     {
         if (OnReserveAsync is not null)
             await OnReserveAsync(ct);
+
+        _reservations.Add(new StockReservationAttempt(
+            sessionKey,
+            items.Select(item => new StockReservationItem(item.VariantId, item.Quantity)).ToList(),
+            ttl));
 
         return items.Select(_ => Guid.NewGuid()).ToList();
     }
@@ -1328,6 +1371,7 @@ internal sealed class TestPaymentService : IPaymentService
         Order.Orders.Models.CustomerOrder order,
         string returnUrl,
         string cancelUrl,
+        DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
         _attempts.Add(new PaymentLinkAttempt(
@@ -1340,6 +1384,7 @@ internal sealed class TestPaymentService : IPaymentService
             order.Total,
             returnUrl,
             cancelUrl,
+            expiresAt,
             order.Items.Select(item => new PaymentLinkAttemptItem(
                 item.ProductId,
                 item.VariantId,
@@ -1347,12 +1392,40 @@ internal sealed class TestPaymentService : IPaymentService
                 item.Quantity,
                 item.TotalPrice)).ToList()));
 
-        return Task.FromResult(new PaymentLinkResult("https://pay.example/checkout", 123456789));
+        return Task.FromResult(new PaymentLinkResult(
+            "https://pay.example/checkout",
+            123456789,
+            "test-payment-link-id"));
     }
 
     public Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default)
     {
         return Task.FromResult(new WebhookResult(123456789, true, "PAID"));
+    }
+}
+
+internal sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+{
+    private DateTimeOffset _utcNow = utcNow;
+
+    public override DateTimeOffset GetUtcNow() => _utcNow;
+
+    public void Advance(TimeSpan duration)
+    {
+        _utcNow = _utcNow.Add(duration);
+    }
+}
+
+internal sealed class TestOrderCreatedEventRecorder : INotificationHandler<OrderCreatedEvent>
+{
+    private readonly List<OrderCreatedEvent> _events = [];
+
+    public IReadOnlyList<OrderCreatedEvent> Events => _events;
+
+    public Task Handle(OrderCreatedEvent notification, CancellationToken cancellationToken)
+    {
+        _events.Add(notification);
+        return Task.CompletedTask;
     }
 }
 

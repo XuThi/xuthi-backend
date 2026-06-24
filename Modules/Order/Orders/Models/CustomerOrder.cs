@@ -47,6 +47,9 @@ public class CustomerOrder : Aggregate<Guid>
     // Payment
     public long? PayOsOrderCode { get; set; } // PayOS order code for online payments
     public string? PaymentLinkId { get; set; } // PayOS payment link ID
+    public string? PaymentLinkUrl { get; set; }
+    public DateTime? PaymentWindowExpiresAt { get; set; }
+    public DateTime? PaymentSettlementGraceEndsAt { get; set; }
     
     // Stock reservation session key
     public string? ReservationSessionKey { get; set; }

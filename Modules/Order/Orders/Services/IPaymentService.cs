@@ -11,6 +11,7 @@ public interface IPaymentService
         CustomerOrder order,
         string returnUrl,
         string cancelUrl,
+        DateTimeOffset expiresAt,
         CancellationToken ct = default);
 
     /// <summary>
@@ -19,5 +20,5 @@ public interface IPaymentService
     Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default);
 }
 
-public record PaymentLinkResult(string CheckoutUrl, long OrderCode);
+public record PaymentLinkResult(string CheckoutUrl, long OrderCode, string? PaymentLinkId = null);
 public record WebhookResult(long OrderCode, bool IsSuccess, string Status);

@@ -29,6 +29,7 @@ public class PayOsPaymentService : IPaymentService
         CustomerOrder order,
         string returnUrl,
         string cancelUrl,
+        DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
         // PayOS orderCode must be a positive integer (Int64).
@@ -42,7 +43,7 @@ public class PayOsPaymentService : IPaymentService
             Description = $"XT {order.OrderNumber}",
             ReturnUrl = returnUrl,
             CancelUrl = cancelUrl,
-            ExpiredAt = (int)DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds(),
+            ExpiredAt = (int)expiresAt.ToUnixTimeSeconds(),
             BuyerName = order.CustomerName,
             BuyerEmail = order.CustomerEmail,
             BuyerPhone = order.CustomerPhone,
@@ -59,7 +60,7 @@ public class PayOsPaymentService : IPaymentService
 
         var result = await _client.PaymentRequests.CreateAsync(request);
 
-        return new PaymentLinkResult(result.CheckoutUrl, orderCode);
+        return new PaymentLinkResult(result.CheckoutUrl, orderCode, result.PaymentLinkId);
     }
 
     public async Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default)
