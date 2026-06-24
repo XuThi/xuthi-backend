@@ -25,6 +25,7 @@ public class OrderDbContext(
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.OrderNumber).IsUnique();
+            entity.HasIndex(e => e.SourceCartId);
             entity.HasIndex(e => e.CustomerEmail);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.PayOsOrderCode)

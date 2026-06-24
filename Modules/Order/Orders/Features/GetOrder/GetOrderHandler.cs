@@ -5,6 +5,7 @@ public record GetOrderQuery(Guid? Id = null, string? OrderNumber = null) : IQuer
 public record OrderDetailResult(
     Guid Id,
     string OrderNumber,
+    Guid? SourceCartId,
     
     // Customer
     string CustomerName,
@@ -33,6 +34,7 @@ public record OrderDetailResult(
     
     // Timestamps
     DateTime CreatedAt,
+    DateTime? CreatedOrderAt,
     DateTime? PaidAt,
     DateTime? ShippedAt,
     DateTime? DeliveredAt,
@@ -85,6 +87,7 @@ internal class GetOrderHandler(OrderDbContext dbContext)
         return new OrderDetailResult(
             order.Id,
             order.OrderNumber,
+            order.SourceCartId,
             order.CustomerName,
             order.CustomerEmail,
             order.CustomerPhone,
@@ -101,6 +104,7 @@ internal class GetOrderHandler(OrderDbContext dbContext)
             order.PaymentStatus.ToString(),
             order.PaymentMethod.ToString(),
             order.CreatedAt!.Value,
+            order.CreatedOrderAt,
             order.PaidAt,
             order.ShippedAt,
             order.DeliveredAt,

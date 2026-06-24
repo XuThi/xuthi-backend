@@ -26,6 +26,7 @@ using Order.Orders.Features.Checkout;
 using Order.Orders.Features.GetOrder;
 using Order.Orders.Features.GetOrders;
 using Order.Orders.Models;
+using Order.Orders.OrderIntake;
 using Order.Orders.Services;
 using PayOS.Models.Webhooks;
 using ProductCatalog;
@@ -1018,6 +1019,7 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
         services.AddScoped<IStockReservationService, TestStockReservationService>();
         services.AddScoped<IPaymentService, TestPaymentService>();
+        services.AddOrderIntake();
 
         _provider = services.BuildServiceProvider(validateScopes: true);
         _scope = _provider.CreateAsyncScope();
@@ -1027,6 +1029,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public IReadOnlyList<PaymentLinkAttempt> PaymentLinkAttempts
         => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).Attempts;
+
+    public IReadOnlyList<StockConfirmation> StockConfirmations
+        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Confirmations;
 
     public async Task<CatalogItem> SeedCatalogItemAsync(decimal price, int stockQuantity, Guid? categoryId = null)
     {
@@ -1236,6 +1241,8 @@ internal sealed record CartState(
 
 internal sealed record OrderPaymentState(long? PayOsOrderCode);
 
+internal sealed record StockConfirmation(string SessionKey, Guid OrderId);
+
 internal sealed record PaymentLinkAttempt(
     Guid OrderId,
     string OrderNumber,
@@ -1272,7 +1279,10 @@ internal static class TestServiceCollectionExtensions
 
 internal sealed class TestStockReservationService : IStockReservationService
 {
+    private readonly List<StockConfirmation> _confirmations = [];
+
     public Func<CancellationToken, Task>? OnReserveAsync { get; set; }
+    public IReadOnlyList<StockConfirmation> Confirmations => _confirmations;
 
     public async Task<List<Guid>> ReserveStockAsync(
         string sessionKey,
@@ -1288,6 +1298,7 @@ internal sealed class TestStockReservationService : IStockReservationService
 
     public Task ConfirmReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
     {
+        _confirmations.Add(new StockConfirmation(sessionKey, orderId));
         return Task.CompletedTask;
     }
 

@@ -5,6 +5,7 @@ namespace Order.Orders.Models;
 public class CustomerOrder : Aggregate<Guid>
 {
     public string OrderNumber { get; set; } = default!; // e.g., "XT-20260131-001"
+    public Guid? SourceCartId { get; set; }
     
     // Customer reference (optional - for logged in users)
     public Guid? CustomerId { get; set; } // Links to Customer module
@@ -36,6 +37,7 @@ public class CustomerOrder : Aggregate<Guid>
     public PaymentMethod PaymentMethod { get; set; }
     
     // Timestamps
+    public DateTime? CreatedOrderAt { get; set; }
     public DateTime? PaidAt { get; set; }
     public DateTime? ShippedAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
