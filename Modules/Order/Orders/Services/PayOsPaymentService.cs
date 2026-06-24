@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
+using Order.Orders.OrderIntake;
 using PayOS;
 using PayOS.Models.V2.PaymentRequests;
 using PayOS.Models.Webhooks;
+using System.Text.Json;
 
 namespace Order.Orders.Services;
 
@@ -63,17 +65,38 @@ public class PayOsPaymentService : IPaymentService
         return new PaymentLinkResult(result.CheckoutUrl, orderCode, result.PaymentLinkId);
     }
 
-    public async Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default)
+    public async Task<PayOsPaymentResult> VerifyWebhookAsync(string rawPayload, CancellationToken ct = default)
     {
+        var webhookPayload = JsonSerializer.Deserialize<Webhook>(
+            rawPayload,
+            new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            }) ?? throw new JsonException("Invalid PayOS webhook payload");
+
         if (webhookPayload?.Data is null || string.IsNullOrWhiteSpace(webhookPayload.Signature))
         {
             throw new InvalidOperationException("Invalid webhook payload");
         }
 
         var verified = await _client.Webhooks.VerifyAsync(webhookPayload);
-        var isSuccess = verified.Code == "00";
 
-        return new WebhookResult(verified.OrderCode, isSuccess, isSuccess ? "PAID" : "FAILED");
+        return new PayOsPaymentResult(
+            verified.OrderCode,
+            MapPaymentStatus(verified.Code),
+            verified.Code);
+    }
+
+    private static PayOsPaymentResultStatus MapPaymentStatus(string? providerStatus)
+    {
+        return providerStatus?.Trim().ToUpperInvariant() switch
+        {
+            "00" or "PAID" or "SUCCESS" => PayOsPaymentResultStatus.Paid,
+            "CANCELLED" or "CANCELED" or "CANCEL" => PayOsPaymentResultStatus.Cancelled,
+            "PENDING" => PayOsPaymentResultStatus.Pending,
+            "PROCESSING" => PayOsPaymentResultStatus.Processing,
+            _ => PayOsPaymentResultStatus.Failed
+        };
     }
 
     /// <summary>

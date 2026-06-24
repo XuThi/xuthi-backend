@@ -3,6 +3,7 @@ using Cart.ShoppingCarts.Features.ApplyVoucher;
 using Order.Orders.Features.CancelPendingPayOsOrder;
 using Order.Orders.Features.Checkout;
 using Order.Orders.Features.GetOrder;
+using Order.Orders.Features.PayOsWebhook;
 using Order.Orders.Models;
 using Order.Orders.OrderIntake;
 using Promotion.Vouchers.Features.ManageVoucherUsage;
@@ -13,6 +14,381 @@ namespace XuThiWebApp.Tests;
 
 public sealed class OrderIntakeTests
 {
+    [Fact]
+    public async Task PayOS_paid_result_confirms_order_attempt_into_created_order()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYPAID10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-paid-result-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYPAID10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paypaid10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        Assert.Equal(PayOsPaymentResolution.Confirmed, resolved.Resolution);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Confirmed", order.Status);
+        Assert.Equal("Paid", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, order.PaidAt);
+        Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
+
+        var confirmation = Assert.Single(app.StockConfirmations);
+        Assert.Equal($"order:{checkout.OrderId}", confirmation.SessionKey);
+        Assert.Equal(checkout.OrderId, confirmation.OrderId);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Finalized, usage.Status);
+        Assert.NotNull(usage.FinalizedAt);
+
+        var createdEvent = Assert.Single(app.CreatedOrderEvents);
+        Assert.Equal(checkout.OrderId, createdEvent.OrderId);
+    }
+
+    [Fact]
+    public async Task Duplicate_PayOS_paid_result_does_not_repeat_created_order_effects()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-paid-duplicate-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(1));
+
+        var duplicate = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        Assert.Equal(PayOsPaymentResolution.AlreadyResolved, duplicate.Resolution);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
+        Assert.Equal(now.UtcDateTime, order.PaidAt);
+        Assert.Single(app.StockConfirmations);
+        Assert.Single(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_webhook_uses_payment_adapter_result_and_order_intake_lifecycle()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-webhook-adapter-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.SetNextWebhookResult(new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        const string rawPayload = """{"data":{"orderCode":123456789},"signature":"test"}""";
+        var webhook = await app.Sender.Send(new PayOsWebhookCommand(rawPayload));
+
+        Assert.True(webhook.Accepted);
+        Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Confirmed", order.Status);
+        Assert.Equal("Paid", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
+        Assert.Single(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_failed_result_fails_order_attempt_and_releases_holds()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYFAIL10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-failed-result-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYFAIL10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "payfail10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Failed));
+
+        Assert.Equal(PayOsPaymentResolution.Failed, resolved.Resolution);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, order.CancelledAt);
+        Assert.Null(order.CreatedOrderAt);
+        Assert.Null(order.PaidAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+        Assert.NotNull(usage.ReleasedAt);
+
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_cancelled_result_cancels_order_attempt_and_releases_stock_hold()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-cancelled-result-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Cancelled));
+
+        Assert.Equal(PayOsPaymentResolution.Cancelled, resolved.Resolution);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime, order.CancelledAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_webhook_with_unknown_order_code_is_acknowledged_without_local_state_changes()
+    {
+        await using var app = new CommerceTestApp();
+        app.SetNextWebhookResult(new PayOsPaymentResult(987654321, PayOsPaymentResultStatus.Paid));
+
+        const string rawPayload = """{"data":{"orderCode":987654321},"signature":"test"}""";
+        var webhook = await app.Sender.Send(new PayOsWebhookCommand(rawPayload));
+
+        Assert.True(webhook.Accepted);
+        Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
+        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_pending_and_processing_results_wait_until_settlement_grace_passes_then_expire()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-pending-processing-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(30)));
+
+        var pending = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Pending));
+
+        Assert.Equal(PayOsPaymentResolution.Waiting, pending.Resolution);
+
+        var waitingOrder = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Pending", waitingOrder.Status);
+        Assert.Equal("Pending", waitingOrder.PaymentStatus);
+        Assert.Empty(app.StockReleases);
+
+        app.TimeProvider.Advance(TimeSpan.FromSeconds(31));
+
+        var processing = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Processing));
+
+        Assert.Equal(PayOsPaymentResolution.Expired, processing.Resolution);
+
+        var expiredOrder = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", expiredOrder.Status);
+        Assert.Equal("Failed", expiredOrder.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), expiredOrder.CancelledAt);
+        Assert.Null(expiredOrder.CreatedOrderAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_paid_result_after_settlement_grace_is_anomaly_not_created_order()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-late-paid-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        Assert.Equal(PayOsPaymentResolution.LatePaidAfterGrace, resolved.Resolution);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), order.CancelledAt);
+        Assert.Contains("late", order.CancellationReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(order.PaidAt);
+        Assert.Null(order.CreatedOrderAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
     [Fact]
     public async Task PayOS_start_creates_uncreated_order_attempt_with_live_payment_window_holds_and_link_identity()
     {

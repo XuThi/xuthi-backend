@@ -14,6 +14,10 @@ public interface IOrderIntake
     Task<StartOrderAttemptResult> StartOrderAttemptAsync(
         StartOrderAttempt request,
         CancellationToken cancellationToken = default);
+
+    Task<ResolvePayOsPaymentResultResult> ResolvePayOsPaymentResultAsync(
+        PayOsPaymentResult result,
+        CancellationToken cancellationToken = default);
 }
 
 public record StartOrderAttempt(
@@ -37,6 +41,36 @@ public record StartOrderAttemptResult(
     decimal Total,
     string Status,
     string? PaymentUrl = null);
+
+public record PayOsPaymentResult(
+    long OrderCode,
+    PayOsPaymentResultStatus Status,
+    string? ProviderStatus = null);
+
+public enum PayOsPaymentResultStatus
+{
+    Paid,
+    Failed,
+    Cancelled,
+    Pending,
+    Processing
+}
+
+public record ResolvePayOsPaymentResultResult(
+    Guid? OrderId,
+    PayOsPaymentResolution Resolution);
+
+public enum PayOsPaymentResolution
+{
+    UnknownOrder,
+    Waiting,
+    Confirmed,
+    Failed,
+    Cancelled,
+    Expired,
+    AlreadyResolved,
+    LatePaidAfterGrace
+}
 
 public static class OrderIntakeServiceCollectionExtensions
 {
@@ -225,8 +259,6 @@ internal class OrderIntake(
             paymentUrl = payResult.CheckoutUrl;
 
             await orderDb.SaveChangesAsync(cancellationToken);
-
-            BackgroundServices.ExpiredPaymentCleanupService.RequireCheck = true;
         }
 
         return new StartOrderAttemptResult(
@@ -235,6 +267,138 @@ internal class OrderIntake(
             order.Total,
             order.Status.ToString(),
             paymentUrl);
+    }
+
+    public async Task<ResolvePayOsPaymentResultResult> ResolvePayOsPaymentResultAsync(
+        PayOsPaymentResult result,
+        CancellationToken cancellationToken = default)
+    {
+        var order = await orderDb.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.PayOsOrderCode == result.OrderCode, cancellationToken);
+
+        if (order is null)
+            return new ResolvePayOsPaymentResultResult(null, PayOsPaymentResolution.UnknownOrder);
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        if (order.CreatedOrderAt is not null)
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.AlreadyResolved);
+
+        if (result.Status == PayOsPaymentResultStatus.Failed)
+        {
+            await FailPayOsOrderAttemptAsync(
+                order,
+                now,
+                "Thanh toán PayOS thất bại",
+                cancellationToken);
+
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Failed);
+        }
+
+        if (result.Status == PayOsPaymentResultStatus.Cancelled)
+        {
+            await FailPayOsOrderAttemptAsync(
+                order,
+                now,
+                "Thanh toán PayOS bị hủy",
+                cancellationToken);
+
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Cancelled);
+        }
+
+        if (result.Status is PayOsPaymentResultStatus.Pending or PayOsPaymentResultStatus.Processing)
+        {
+            if (IsAfterSettlementGrace(order, now))
+            {
+                await FailPayOsOrderAttemptAsync(
+                    order,
+                    now,
+                    "Quá thời gian thanh toán PayOS",
+                    cancellationToken);
+
+                return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Expired);
+            }
+
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Waiting);
+        }
+
+        if (IsAfterSettlementGrace(order, now))
+        {
+            await FailPayOsOrderAttemptAsync(
+                order,
+                now,
+                "Late PayOS paid result after settlement grace; manual review required",
+                cancellationToken);
+
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.LatePaidAfterGrace);
+        }
+
+        var shouldPublishCreatedOrder = order.CreatedOrderAt is null;
+
+        order.PaymentStatus = PaymentStatus.Paid;
+        order.PaidAt ??= now;
+        order.Status = OrderStatus.Confirmed;
+
+        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
+        {
+            await stockReservation.ConfirmReservationsAsync(
+                order.ReservationSessionKey,
+                order.Id,
+                cancellationToken);
+        }
+
+        if (order.VoucherId.HasValue)
+        {
+            await sender.Send(new FinalizeVoucherUsageCommand(
+                order.VoucherId.Value,
+                order.Id), cancellationToken);
+        }
+
+        order.CreatedOrderAt ??= now;
+        if (shouldPublishCreatedOrder)
+            order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
+
+        await orderDb.SaveChangesAsync(cancellationToken);
+
+        return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Confirmed);
+    }
+
+    private async Task FailPayOsOrderAttemptAsync(
+        CustomerOrder order,
+        DateTime now,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        if (order.Status == OrderStatus.Cancelled && order.PaymentStatus == PaymentStatus.Failed)
+            return;
+
+        order.PaymentStatus = PaymentStatus.Failed;
+        order.Status = OrderStatus.Cancelled;
+        order.CancelledAt ??= now;
+        order.CancellationReason ??= reason;
+
+        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
+        {
+            await stockReservation.ReleaseReservationsAsync(
+                order.ReservationSessionKey,
+                cancellationToken);
+        }
+
+        if (order.VoucherId.HasValue && order.CreatedOrderAt is null)
+        {
+            await sender.Send(new ReleaseVoucherUsageCommand(
+                order.VoucherId.Value,
+                order.Id), cancellationToken);
+        }
+
+        await orderDb.SaveChangesAsync(cancellationToken);
+    }
+
+    private static bool IsAfterSettlementGrace(CustomerOrder order, DateTime now)
+    {
+        return order.PaymentSettlementGraceEndsAt.HasValue
+            && now > order.PaymentSettlementGraceEndsAt.Value;
     }
 
     private async Task<CustomerOrder?> FindPayOsAttemptForCartAsync(

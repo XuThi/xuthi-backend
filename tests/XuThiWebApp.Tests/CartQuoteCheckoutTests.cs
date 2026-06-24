@@ -29,7 +29,6 @@ using Order.Orders.Features.GetOrders;
 using Order.Orders.Models;
 using Order.Orders.OrderIntake;
 using Order.Orders.Services;
-using PayOS.Models.Webhooks;
 using ProductCatalog;
 using ProductCatalog.Brands.Models;
 using ProductCatalog.Categories.Models;
@@ -1037,11 +1036,19 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public ISender Sender => _scope.ServiceProvider.GetRequiredService<ISender>();
 
+    public IOrderIntake OrderIntake => _scope.ServiceProvider.GetRequiredService<IOrderIntake>();
+
     public IReadOnlyList<PaymentLinkAttempt> PaymentLinkAttempts
         => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).Attempts;
 
+    public IReadOnlyList<string> VerifiedWebhookPayloads
+        => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).VerifiedWebhookPayloads;
+
     public IReadOnlyList<StockConfirmation> StockConfirmations
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Confirmations;
+
+    public IReadOnlyList<StockRelease> StockReleases
+        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Releases;
 
     public IReadOnlyList<StockReservationAttempt> StockReservations
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Reservations;
@@ -1179,6 +1186,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         stockReservation.OnReserveAsync = onReserve;
     }
 
+    public void SetNextWebhookResult(PayOsPaymentResult result)
+    {
+        var payment = (TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>();
+        payment.NextWebhookResult = result;
+    }
+
     public async Task ExhaustVoucherAsync(string code, CancellationToken ct = default)
     {
         var promotion = _scope.ServiceProvider.GetRequiredService<PromotionDbContext>();
@@ -1271,6 +1284,7 @@ internal sealed record OrderPaymentState(
     DateTime? PaymentSettlementGraceEndsAt);
 
 internal sealed record StockConfirmation(string SessionKey, Guid OrderId);
+internal sealed record StockRelease(string SessionKey);
 internal sealed record StockReservationAttempt(
     string SessionKey,
     IReadOnlyList<StockReservationItem> Items,
@@ -1317,10 +1331,12 @@ internal sealed class TestStockReservationService : IStockReservationService
 {
     private readonly List<StockReservationAttempt> _reservations = [];
     private readonly List<StockConfirmation> _confirmations = [];
+    private readonly List<StockRelease> _releases = [];
 
     public Func<CancellationToken, Task>? OnReserveAsync { get; set; }
     public IReadOnlyList<StockReservationAttempt> Reservations => _reservations;
     public IReadOnlyList<StockConfirmation> Confirmations => _confirmations;
+    public IReadOnlyList<StockRelease> Releases => _releases;
 
     public async Task<List<Guid>> ReserveStockAsync(
         string sessionKey,
@@ -1347,6 +1363,7 @@ internal sealed class TestStockReservationService : IStockReservationService
 
     public Task ReleaseReservationsAsync(string sessionKey, CancellationToken ct = default)
     {
+        _releases.Add(new StockRelease(sessionKey));
         return Task.CompletedTask;
     }
 
@@ -1364,8 +1381,12 @@ internal sealed class TestStockReservationService : IStockReservationService
 internal sealed class TestPaymentService : IPaymentService
 {
     private readonly List<PaymentLinkAttempt> _attempts = [];
+    private readonly List<string> _verifiedWebhookPayloads = [];
 
     public IReadOnlyList<PaymentLinkAttempt> Attempts => _attempts;
+    public IReadOnlyList<string> VerifiedWebhookPayloads => _verifiedWebhookPayloads;
+    public PayOsPaymentResult NextWebhookResult { get; set; } =
+        new(123456789, PayOsPaymentResultStatus.Paid);
 
     public Task<PaymentLinkResult> CreatePaymentLinkAsync(
         Order.Orders.Models.CustomerOrder order,
@@ -1398,9 +1419,10 @@ internal sealed class TestPaymentService : IPaymentService
             "test-payment-link-id"));
     }
 
-    public Task<WebhookResult> HandleWebhookAsync(Webhook webhookPayload, CancellationToken ct = default)
+    public Task<PayOsPaymentResult> VerifyWebhookAsync(string rawPayload, CancellationToken ct = default)
     {
-        return Task.FromResult(new WebhookResult(123456789, true, "PAID"));
+        _verifiedWebhookPayloads.Add(rawPayload);
+        return Task.FromResult(NextWebhookResult);
     }
 }
 

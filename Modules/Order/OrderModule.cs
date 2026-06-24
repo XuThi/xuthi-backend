@@ -5,7 +5,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Order.Data;
-using Order.Orders.BackgroundServices;
 using Order.Orders.OrderIntake;
 using Order.Orders.Services;
 
@@ -26,9 +25,6 @@ public static class OrderModule
         // Payment service (PayOS)
         builder.Services.AddScoped<IPaymentService, PayOsPaymentService>();
         builder.Services.AddOrderIntake();
-
-        // Background service: cancel expired PayOS payment orders
-        builder.Services.AddHostedService<ExpiredPaymentCleanupService>();
 
         return builder.Services;
     }
