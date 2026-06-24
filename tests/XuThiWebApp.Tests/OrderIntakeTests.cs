@@ -3,6 +3,7 @@ using Cart.ShoppingCarts.Features.ApplyVoucher;
 using Order.Orders.Features.CancelPendingPayOsOrder;
 using Order.Orders.Features.Checkout;
 using Order.Orders.Features.GetOrder;
+using Order.Orders.Features.GetOrders;
 using Order.Orders.Features.PayOsWebhook;
 using Order.Orders.Models;
 using Order.Orders.OrderIntake;
@@ -435,6 +436,127 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
+    public async Task PayOS_cancel_after_settlement_grace_lazily_expires_instead_of_using_frontend_reason()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYCANCELGRACE10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-cancel-after-grace-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYCANCELGRACE10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paycancelgrace10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var cancelled = await app.Sender.Send(new CancelPendingPayOsOrderCommand(
+            checkout.OrderId,
+            RequestUserId: null,
+            RequestEmail: "jane@example.com",
+            Reason: "Frontend cancel redirect"));
+
+        Assert.Equal("Cancelled", cancelled.Status);
+        Assert.Equal("Failed", cancelled.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), cancelled.CancelledAt);
+        Assert.Contains("Quá thời gian", cancelled.CancellationReason);
+        Assert.DoesNotContain("Frontend", cancelled.CancellationReason);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_cancel_during_settlement_grace_does_not_release_holds_without_verified_result()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYCANCELWAIT10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-cancel-during-grace-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYCANCELWAIT10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paycancelwait10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(30)));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CancelPendingPayOsOrderCommand(
+                checkout.OrderId,
+                RequestUserId: null,
+                RequestEmail: "jane@example.com",
+                Reason: "Frontend cancel redirect")));
+
+        Assert.Contains("settlement grace", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(app.StockReleases);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Held, usage.Status);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Pending", order.Status);
+        Assert.Equal("Pending", order.PaymentStatus);
+        Assert.Null(order.CancelledAt);
+        Assert.Null(order.CancellationReason);
+    }
+
+    [Fact]
     public async Task PayOS_webhook_with_unknown_order_code_is_acknowledged_without_local_state_changes()
     {
         await using var app = new CommerceTestApp();
@@ -447,6 +569,55 @@ public sealed class OrderIntakeTests
         Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
         Assert.Empty(app.StockConfirmations);
         Assert.Empty(app.StockReleases);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_late_webhook_with_pending_provider_result_expires_touched_attempt()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-late-webhook-pending-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+        app.SetNextWebhookResult(new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Pending));
+
+        const string rawPayload = """{"data":{"orderCode":123456789,"status":"PENDING"},"signature":"test"}""";
+        var webhook = await app.Sender.Send(new PayOsWebhookCommand(rawPayload));
+
+        Assert.True(webhook.Accepted);
+        Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), order.CancelledAt);
+        Assert.Contains("Quá thời gian", order.CancellationReason);
+        Assert.Null(order.CreatedOrderAt);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -506,6 +677,116 @@ public sealed class OrderIntakeTests
         var release = Assert.Single(app.StockReleases);
         Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
         Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task Specific_order_read_lazily_expires_PayOS_attempt_after_settlement_grace()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYREAD10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-lazy-read-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYREAD10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "payread10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), order.CancelledAt);
+        Assert.Contains("Quá thời gian", order.CancellationReason);
+        Assert.Null(order.CreatedOrderAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+        Assert.NotNull(usage.ReleasedAt);
+
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task Broad_order_listing_does_not_sweep_expired_PayOS_attempts()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYLIST10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-listing-no-sweep-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYLIST10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paylist10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var orders = await app.Sender.Send(new GetOrdersQuery(PageSize: 100));
+
+        var summary = Assert.Single(orders.Orders);
+        Assert.Equal(checkout.OrderId, summary.Id);
+        Assert.Equal("Pending", summary.Status);
+        Assert.Equal("Pending", summary.PaymentStatus);
+        Assert.Empty(app.StockReleases);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Held, usage.Status);
     }
 
     [Fact]
@@ -722,6 +1003,68 @@ public sealed class OrderIntakeTests
         Assert.Single(app.StockReservations);
         Assert.Empty(app.StockConfirmations);
         Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_checkout_retry_after_settlement_grace_expires_attempt_without_resurrecting_link()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYRETRYGRACE10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-retry-after-grace-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYRETRYGRACE10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "payretrygrace10"));
+
+        var request = new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel");
+
+        var first = await app.Sender.Send(new CheckoutCommand(request));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(request)));
+
+        Assert.Contains("fresh Cart Quote", ex.Message);
+        Assert.Single(app.PaymentLinkAttempts);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{first.OrderId}", release.SessionKey);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: first.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), order.CancelledAt);
+        Assert.Contains("Quá thời gian", order.CancellationReason);
+        Assert.Null(order.CreatedOrderAt);
     }
 
     [Fact]

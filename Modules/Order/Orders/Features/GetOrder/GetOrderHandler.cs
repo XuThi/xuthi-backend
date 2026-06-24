@@ -1,3 +1,5 @@
+using Order.Orders.OrderIntake;
+
 namespace Order.Orders.Features.GetOrder;
 
 public record GetOrderQuery(Guid? Id = null, string? OrderNumber = null) : IQuery<OrderDetailResult>;
@@ -59,30 +61,42 @@ public record OrderItemDetail(
     decimal TotalPrice
 );
 
-internal class GetOrderHandler(OrderDbContext dbContext)
+internal class GetOrderHandler(
+    OrderDbContext dbContext,
+    IOrderIntake orderIntake)
     : IQueryHandler<GetOrderQuery, OrderDetailResult>
 {
     public async Task<OrderDetailResult> Handle(GetOrderQuery request, CancellationToken cancellationToken)
     {
-        var query = dbContext.Orders
-            .Include(o => o.Items)
-            .AsQueryable();
-
-        CustomerOrder? order = null;
+        Guid? orderId = null;
 
         if (request.Id.HasValue)
         {
-            order = await query.FirstOrDefaultAsync(o => o.Id == request.Id.Value, cancellationToken);
+            orderId = await dbContext.Orders
+                .Where(o => o.Id == request.Id.Value)
+                .Select(o => (Guid?)o.Id)
+                .FirstOrDefaultAsync(cancellationToken);
         }
         else if (!string.IsNullOrWhiteSpace(request.OrderNumber))
         {
-            order = await query.FirstOrDefaultAsync(o => o.OrderNumber == request.OrderNumber, cancellationToken);
+            orderId = await dbContext.Orders
+                .Where(o => o.OrderNumber == request.OrderNumber)
+                .Select(o => (Guid?)o.Id)
+                .FirstOrDefaultAsync(cancellationToken);
         }
 
-        if (order is null)
+        if (!orderId.HasValue)
         {
             throw new KeyNotFoundException("Order not found");
         }
+
+        await orderIntake.ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(
+            orderId.Value,
+            cancellationToken);
+
+        var order = await dbContext.Orders
+            .Include(o => o.Items)
+            .FirstAsync(o => o.Id == orderId.Value, cancellationToken);
 
         return new OrderDetailResult(
             order.Id,

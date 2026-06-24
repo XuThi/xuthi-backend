@@ -19,6 +19,10 @@ public interface IOrderIntake
         PayOsPaymentResult result,
         CancellationToken cancellationToken = default);
 
+    Task<bool> ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default);
+
     Task<CancelOrderAttemptResult> CancelOrderAttemptAsync(
         CancelOrderAttempt request,
         CancellationToken cancellationToken = default);
@@ -128,6 +132,11 @@ internal class OrderIntake(
                 {
                     return ToStartResult(existingAttempt);
                 }
+
+                await ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(
+                    existingAttempt,
+                    now.UtcDateTime,
+                    cancellationToken);
 
                 throw new InvalidOperationException(
                     "Payment Window is no longer live for this Order Attempt. Return to the cart for a fresh Cart Quote.");
@@ -382,6 +391,23 @@ internal class OrderIntake(
         return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Confirmed);
     }
 
+    public async Task<bool> ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        var order = await orderDb.Orders
+            .FirstOrDefaultAsync(o => o.Id == orderId, cancellationToken);
+
+        if (order is null)
+            throw new KeyNotFoundException("Order not found");
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        return await ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(
+            order,
+            now,
+            cancellationToken);
+    }
+
     public async Task<CancelOrderAttemptResult> CancelOrderAttemptAsync(
         CancelOrderAttempt request,
         CancellationToken cancellationToken = default)
@@ -401,23 +427,54 @@ internal class OrderIntake(
         if (order.CreatedOrderAt is not null)
             throw new InvalidOperationException("Created Orders must be cancelled through the broader order workflow.");
 
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        if (await ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(order, now, cancellationToken))
+        {
+            return ToCancelResult(order);
+        }
+
+        if (IsInSettlementGrace(order, now))
+            throw new InvalidOperationException(
+                "PayOS Order Attempt is in settlement grace; wait for a verified provider result or grace end.");
+
         if (order.Status != OrderStatus.Pending || order.PaymentStatus != PaymentStatus.Pending)
             throw new InvalidOperationException("Don hang PayOS khong con o trang thai cho thanh toan de huy.");
 
-        var now = timeProvider.GetUtcNow().UtcDateTime;
         var reason = string.IsNullOrWhiteSpace(request.Reason)
             ? "Khach huy don hang truoc khi xac nhan"
             : request.Reason;
 
         await FailPayOsOrderAttemptAsync(order, now, reason, cancellationToken);
 
+        return ToCancelResult(order);
+    }
+
+    private static CancelOrderAttemptResult ToCancelResult(CustomerOrder order)
+    {
         return new CancelOrderAttemptResult(
             order.Id,
             order.OrderNumber,
             order.Status.ToString(),
             order.PaymentStatus.ToString(),
-            order.CancelledAt ?? now,
+            order.CancelledAt ?? throw new InvalidOperationException("CancelledAt is required for a cancelled Order Attempt."),
             order.CancellationReason);
+    }
+
+    private async Task<bool> ExpirePayOsOrderAttemptIfSettlementGraceEndedAsync(
+        CustomerOrder order,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        if (!IsPendingUncreatedPayOsAttempt(order) || !IsAfterSettlementGrace(order, now))
+            return false;
+
+        await FailPayOsOrderAttemptAsync(
+            order,
+            now,
+            "Quá thời gian thanh toán PayOS",
+            cancellationToken);
+
+        return true;
     }
 
     private async Task FailPayOsOrderAttemptAsync(
@@ -467,6 +524,22 @@ internal class OrderIntake(
     {
         return order.PaymentSettlementGraceEndsAt.HasValue
             && now > order.PaymentSettlementGraceEndsAt.Value;
+    }
+
+    private static bool IsInSettlementGrace(CustomerOrder order, DateTime now)
+    {
+        return order.PaymentWindowExpiresAt.HasValue
+            && order.PaymentSettlementGraceEndsAt.HasValue
+            && now > order.PaymentWindowExpiresAt.Value
+            && now <= order.PaymentSettlementGraceEndsAt.Value;
+    }
+
+    private static bool IsPendingUncreatedPayOsAttempt(CustomerOrder order)
+    {
+        return order.PaymentMethod == PaymentMethod.PayOS
+            && order.CreatedOrderAt is null
+            && order.Status == OrderStatus.Pending
+            && order.PaymentStatus == PaymentStatus.Pending;
     }
 
     private async Task<CustomerOrder?> FindPayOsAttemptForCartAsync(
