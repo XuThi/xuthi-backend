@@ -121,13 +121,16 @@ internal class OrderIntake(
     {
         var now = timeProvider.GetUtcNow();
 
-        if (request.PaymentMethod == PaymentMethod.PayOS)
-        {
-            var existingAttempt = await FindPayOsAttemptForCartAsync(
-                request.CartId,
-                cancellationToken);
+        var existingAttempt = await FindLatestAttemptForCartAsync(
+            request.CartId,
+            cancellationToken);
 
-            if (existingAttempt is not null)
+        if (existingAttempt is not null)
+        {
+            if (existingAttempt.CreatedOrderAt is not null)
+                return ToStartResult(existingAttempt);
+
+            if (existingAttempt.PaymentMethod == PaymentMethod.PayOS)
             {
                 if (CanReusePayOsAttempt(existingAttempt, now.UtcDateTime))
                 {
@@ -142,6 +145,9 @@ internal class OrderIntake(
                 throw new InvalidOperationException(
                     "Payment Window is no longer live for this Order Attempt. Return to the cart for a fresh Cart Quote.");
             }
+
+            throw new InvalidOperationException(
+                "An uncreated Order Attempt already exists for this cart.");
         }
 
         var quote = (await sender.Send(
@@ -224,14 +230,28 @@ internal class OrderIntake(
             ? paymentSettlementGraceEndsAt!.Value - now
             : (TimeSpan?)null;
 
-        await stockReservation.ReserveStockAsync(
-            sessionKey,
-            quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
-            stockHoldTtl,
-            cancellationToken);
+        var stockReserved = false;
 
-        orderDb.Orders.Add(order);
-        await orderDb.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await stockReservation.ReserveStockAsync(
+                sessionKey,
+                quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
+                stockHoldTtl,
+                cancellationToken);
+            stockReserved = true;
+
+            orderDb.Orders.Add(order);
+            await orderDb.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            if (stockReserved)
+                await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+
+            DetachOrderAttempt(order);
+            throw;
+        }
 
         try
         {
@@ -389,6 +409,20 @@ internal class OrderIntake(
         if (order.CreatedOrderAt is not null)
             return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.AlreadyResolved);
 
+        if (result.Status == PayOsPaymentResultStatus.Paid && IsAfterSettlementGrace(order, now))
+        {
+            await FailPayOsOrderAttemptAsync(
+                order,
+                now,
+                "Late PayOS paid result after settlement grace; manual review required",
+                cancellationToken);
+
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.LatePaidAfterGrace);
+        }
+
+        if (IsTerminalUncreatedPayOsAttempt(order))
+            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.AlreadyResolved);
+
         if (result.Status == PayOsPaymentResultStatus.Failed)
         {
             await FailPayOsOrderAttemptAsync(
@@ -425,17 +459,6 @@ internal class OrderIntake(
             }
 
             return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Waiting);
-        }
-
-        if (IsAfterSettlementGrace(order, now))
-        {
-            await FailPayOsOrderAttemptAsync(
-                order,
-                now,
-                "Late PayOS paid result after settlement grace; manual review required",
-                cancellationToken);
-
-            return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.LatePaidAfterGrace);
         }
 
         var shouldPublishCreatedOrder = order.CreatedOrderAt is null;
@@ -665,6 +688,13 @@ internal class OrderIntake(
         }
     }
 
+    private void DetachOrderAttempt(CustomerOrder order)
+    {
+        var entry = orderDb.Entry(order);
+        if (entry.State != EntityState.Detached)
+            entry.State = EntityState.Detached;
+    }
+
     private static RestoreConsumedCartCommand ToRestoreCartCommand(CartQuote quote)
     {
         return new RestoreConsumedCartCommand(
@@ -721,15 +751,21 @@ internal class OrderIntake(
             && order.PaymentStatus == PaymentStatus.Pending;
     }
 
-    private async Task<CustomerOrder?> FindPayOsAttemptForCartAsync(
+    private static bool IsTerminalUncreatedPayOsAttempt(CustomerOrder order)
+    {
+        return order.PaymentMethod == PaymentMethod.PayOS
+            && order.CreatedOrderAt is null
+            && (order.Status == OrderStatus.Cancelled || order.PaymentStatus == PaymentStatus.Failed);
+    }
+
+    private async Task<CustomerOrder?> FindLatestAttemptForCartAsync(
         Guid cartId,
         CancellationToken cancellationToken)
     {
         return await orderDb.Orders
             .OrderByDescending(o => o.CreatedAt)
             .FirstOrDefaultAsync(o =>
-                o.SourceCartId == cartId
-                && o.PaymentMethod == PaymentMethod.PayOS,
+                o.SourceCartId == cartId,
                 cancellationToken);
     }
 
