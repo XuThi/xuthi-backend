@@ -452,6 +452,82 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
+    public async Task Broader_order_status_confirmation_rejects_uncreated_PayOS_order_attempt_and_leaves_expiry_to_order_intake()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "ADMINCONFIRM10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "admin-cannot-confirm-uncreated-payos-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("ADMINCONFIRM10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "adminconfirm10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new UpdateOrderStatusCommand(
+                checkout.OrderId,
+                OrderStatus.Confirmed,
+                Reason: "Admin confirmation")));
+
+        Assert.Contains("Order Intake", ex.Message);
+
+        var pendingOrder = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Pending", pendingOrder.Status);
+        Assert.Equal("Pending", pendingOrder.PaymentStatus);
+        Assert.Null(pendingOrder.CancelledAt);
+        Assert.Null(pendingOrder.CreatedOrderAt);
+
+        var heldAudit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var heldUsage = Assert.Single(heldAudit.Usages);
+        Assert.Equal(VoucherUsageStatus.Held, heldUsage.Status);
+
+        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.CreatedOrderEvents);
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var expiredOrder = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", expiredOrder.Status);
+        Assert.Equal("Failed", expiredOrder.PaymentStatus);
+        Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), expiredOrder.CancelledAt);
+        Assert.Null(expiredOrder.CreatedOrderAt);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+
+        var releasedAudit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var releasedUsage = Assert.Single(releasedAudit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, releasedUsage.Status);
+
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
     public async Task Customer_cannot_cancel_unowned_PayOS_order_attempt()
     {
         var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);

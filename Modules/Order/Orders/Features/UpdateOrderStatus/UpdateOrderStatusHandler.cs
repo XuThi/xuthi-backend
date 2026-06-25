@@ -37,12 +37,12 @@ internal class UpdateOrderStatusHandler(
 
         var previousStatus = order.Status;
 
+        if (order.CreatedOrderAt is null)
+            throw new InvalidOperationException(
+                "Uncreated Order Attempts are owned by Order Intake and cannot be updated through the broader order-status workflow.");
+
         // Validate status transition
         ValidateStatusTransition(previousStatus, command.NewStatus);
-
-        if (command.NewStatus == OrderStatus.Cancelled && order.CreatedOrderAt is null)
-            throw new InvalidOperationException(
-                "Uncreated Order Attempts must be cancelled through Order Intake.");
 
         // Handle cancellation
         if (command.NewStatus == OrderStatus.Cancelled)
