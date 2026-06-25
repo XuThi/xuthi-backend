@@ -1,4 +1,5 @@
 using Cart.ShoppingCarts.Features.QuoteAndConsumeCart;
+using Cart.ShoppingCarts.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Order.Orders.Events;
@@ -146,6 +147,7 @@ internal class OrderIntake(
         var quote = (await sender.Send(
             new QuoteCartForCheckoutCommand(request.CartId, request.CustomerId),
             cancellationToken)).Quote;
+        var cartSnapshot = ToRestoreCartCommand(quote);
 
         var orderItems = quote.Items.Select(item => new OrderItem
         {
@@ -218,12 +220,14 @@ internal class OrderIntake(
         var sessionKey = $"order:{order.Id}";
         order.ReservationSessionKey = sessionKey;
 
+        var stockHoldTtl = request.PaymentMethod == PaymentMethod.PayOS
+            ? paymentSettlementGraceEndsAt!.Value - now
+            : (TimeSpan?)null;
+
         await stockReservation.ReserveStockAsync(
             sessionKey,
             quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
-            request.PaymentMethod == PaymentMethod.PayOS
-                ? paymentWindowPolicy.PaymentWindow
-                : null,
+            stockHoldTtl,
             cancellationToken);
 
         orderDb.Orders.Add(order);
@@ -242,50 +246,123 @@ internal class OrderIntake(
         }
         catch
         {
-            orderDb.Orders.Remove(order);
-            await orderDb.SaveChangesAsync(cancellationToken);
             await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+            await RemoveOrderAttemptRecordAsync(order, cancellationToken);
             throw;
-        }
-
-        await sender.Send(new ConsumeQuotedCartCommand(request.CartId, request.CustomerId), cancellationToken);
-
-        if (request.PaymentMethod is PaymentMethod.CashOnDelivery or PaymentMethod.BankTransfer)
-        {
-            await stockReservation.ConfirmReservationsAsync(sessionKey, order.Id, cancellationToken);
-
-            if (order.VoucherId.HasValue)
-            {
-                await sender.Send(new FinalizeVoucherUsageCommand(
-                    order.VoucherId.Value,
-                    order.Id), cancellationToken);
-            }
-
-            order.CreatedOrderAt ??= timeProvider.GetUtcNow().UtcDateTime;
-            order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
-            await orderDb.SaveChangesAsync(cancellationToken);
         }
 
         string? paymentUrl = null;
 
+        if (request.PaymentMethod is PaymentMethod.CashOnDelivery or PaymentMethod.BankTransfer)
+        {
+            var cartConsumed = false;
+            var stockConfirmed = false;
+
+            try
+            {
+                await sender.Send(new ConsumeQuotedCartCommand(request.CartId, request.CustomerId), cancellationToken);
+                cartConsumed = true;
+
+                await stockReservation.ConfirmReservationsAsync(sessionKey, order.Id, cancellationToken);
+                stockConfirmed = true;
+
+                if (order.VoucherId.HasValue)
+                {
+                    await sender.Send(new FinalizeVoucherUsageCommand(
+                        order.VoucherId.Value,
+                        order.Id), cancellationToken);
+                }
+
+                order.CreatedOrderAt ??= timeProvider.GetUtcNow().UtcDateTime;
+                order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
+                await orderDb.SaveChangesAsync(cancellationToken);
+            }
+            catch
+            {
+                order.ClearDomainEvents();
+
+                if (order.VoucherId.HasValue)
+                    await ReleaseVoucherHoldAsync(order, cancellationToken);
+
+                if (stockConfirmed)
+                {
+                    await stockReservation.RestoreConfirmedReservationsAsync(
+                        sessionKey,
+                        order.Id,
+                        cancellationToken);
+                }
+                else
+                {
+                    await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+                }
+
+                if (cartConsumed)
+                    await sender.Send(cartSnapshot, cancellationToken);
+
+                await RemoveOrderAttemptRecordAsync(order, cancellationToken);
+                throw;
+            }
+        }
+
         if (request.PaymentMethod == PaymentMethod.PayOS)
         {
-            var returnUrl = AppendOrderIdToUrl(
-                request.ReturnUrl ?? throw new InvalidOperationException("ReturnUrl is required for PayOS"),
-                order.Id);
-            var cancelUrl = AppendOrderIdToUrl(
-                request.CancelUrl ?? throw new InvalidOperationException("CancelUrl is required for PayOS"),
-                order.Id);
+            var cartConsumed = false;
 
-            var payResult = await paymentService.CreatePaymentLinkAsync(
-                order, returnUrl, cancelUrl, paymentWindowExpiresAt!.Value, cancellationToken);
+            try
+            {
+                await sender.Send(new ConsumeQuotedCartCommand(request.CartId, request.CustomerId), cancellationToken);
+                cartConsumed = true;
 
-            order.PayOsOrderCode = payResult.OrderCode;
-            order.PaymentLinkId = payResult.PaymentLinkId;
-            order.PaymentLinkUrl = payResult.CheckoutUrl;
-            paymentUrl = payResult.CheckoutUrl;
+                var returnUrl = AppendOrderIdToUrl(
+                    request.ReturnUrl ?? throw new InvalidOperationException("ReturnUrl is required for PayOS"),
+                    order.Id);
+                var cancelUrl = AppendOrderIdToUrl(
+                    request.CancelUrl ?? throw new InvalidOperationException("CancelUrl is required for PayOS"),
+                    order.Id);
 
-            await orderDb.SaveChangesAsync(cancellationToken);
+                var payResult = await paymentService.CreatePaymentLinkAsync(
+                    order, returnUrl, cancelUrl, paymentWindowExpiresAt!.Value, cancellationToken);
+
+                order.PayOsOrderCode = payResult.OrderCode;
+                order.PaymentLinkId = payResult.PaymentLinkId;
+                order.PaymentLinkUrl = payResult.CheckoutUrl;
+                paymentUrl = payResult.CheckoutUrl;
+
+                await orderDb.SaveChangesAsync(cancellationToken);
+            }
+            catch
+            {
+                Exception? paymentLinkCancellationFailure = null;
+
+                if (order.PayOsOrderCode.HasValue)
+                {
+                    try
+                    {
+                        await paymentService.CancelPaymentLinkAsync(
+                            order.PayOsOrderCode.Value,
+                            "Order Intake failed before the PayOS Order Attempt could be returned.",
+                            cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        paymentLinkCancellationFailure = ex;
+                    }
+                }
+
+                if (cartConsumed)
+                    await sender.Send(cartSnapshot, cancellationToken);
+
+                await RemoveUncreatedOrderAttemptAsync(order, cancellationToken);
+
+                if (paymentLinkCancellationFailure is not null)
+                {
+                    throw new InvalidOperationException(
+                        "PayOS payment-link cancellation failed during Order Intake compensation.",
+                        paymentLinkCancellationFailure);
+                }
+
+                throw;
+            }
         }
 
         return new StartOrderAttemptResult(
@@ -363,30 +440,56 @@ internal class OrderIntake(
 
         var shouldPublishCreatedOrder = order.CreatedOrderAt is null;
 
-        order.PaymentStatus = PaymentStatus.Paid;
-        order.PaidAt ??= now;
-        order.Status = OrderStatus.Confirmed;
+        var stockConfirmed = false;
+        var voucherFinalized = false;
 
-        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
+        try
         {
-            await stockReservation.ConfirmReservationsAsync(
-                order.ReservationSessionKey,
-                order.Id,
-                cancellationToken);
-        }
+            order.PaymentStatus = PaymentStatus.Paid;
+            order.PaidAt ??= now;
+            order.Status = OrderStatus.Confirmed;
 
-        if (order.VoucherId.HasValue)
+            if (!string.IsNullOrEmpty(order.ReservationSessionKey))
+            {
+                await stockReservation.ConfirmReservationsAsync(
+                    order.ReservationSessionKey,
+                    order.Id,
+                    cancellationToken);
+                stockConfirmed = true;
+            }
+
+            if (order.VoucherId.HasValue)
+            {
+                await sender.Send(new FinalizeVoucherUsageCommand(
+                    order.VoucherId.Value,
+                    order.Id), cancellationToken);
+                voucherFinalized = true;
+            }
+
+            order.CreatedOrderAt ??= now;
+            if (shouldPublishCreatedOrder)
+                order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
+
+            await orderDb.SaveChangesAsync(cancellationToken);
+        }
+        catch
         {
-            await sender.Send(new FinalizeVoucherUsageCommand(
-                order.VoucherId.Value,
-                order.Id), cancellationToken);
+            order.ClearDomainEvents();
+
+            if (voucherFinalized)
+                await ReleaseVoucherHoldAsync(order, cancellationToken);
+
+            if (stockConfirmed && !string.IsNullOrEmpty(order.ReservationSessionKey))
+            {
+                await stockReservation.RestoreConfirmedReservationsAsync(
+                    order.ReservationSessionKey,
+                    order.Id,
+                    cancellationToken);
+            }
+
+            await ReloadOrderAttemptAsync(order, cancellationToken);
+            throw;
         }
-
-        order.CreatedOrderAt ??= now;
-        if (shouldPublishCreatedOrder)
-            order.AddDomainEvent(OrderCreatedEventFactory.FromOrder(order));
-
-        await orderDb.SaveChangesAsync(cancellationToken);
 
         return new ResolvePayOsPaymentResultResult(order.Id, PayOsPaymentResolution.Confirmed);
     }
@@ -506,6 +609,82 @@ internal class OrderIntake(
         }
 
         await orderDb.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task RemoveUncreatedOrderAttemptAsync(
+        CustomerOrder order,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
+        {
+            await stockReservation.ReleaseReservationsAsync(
+                order.ReservationSessionKey,
+                cancellationToken);
+        }
+
+        if (order.VoucherId.HasValue)
+        {
+            await ReleaseVoucherHoldAsync(order, cancellationToken);
+        }
+
+        await RemoveOrderAttemptRecordAsync(order, cancellationToken);
+    }
+
+    private async Task ReleaseVoucherHoldAsync(
+        CustomerOrder order,
+        CancellationToken cancellationToken)
+    {
+        if (!order.VoucherId.HasValue)
+            return;
+
+        await sender.Send(new ReleaseVoucherUsageCommand(
+            order.VoucherId.Value,
+            order.Id), cancellationToken);
+    }
+
+    private async Task RemoveOrderAttemptRecordAsync(
+        CustomerOrder order,
+        CancellationToken cancellationToken)
+    {
+        order.ClearDomainEvents();
+        orderDb.Orders.Remove(order);
+        await orderDb.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task ReloadOrderAttemptAsync(
+        CustomerOrder order,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await orderDb.Entry(order).ReloadAsync(cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            orderDb.Entry(order).State = EntityState.Detached;
+        }
+    }
+
+    private static RestoreConsumedCartCommand ToRestoreCartCommand(CartQuote quote)
+    {
+        return new RestoreConsumedCartCommand(
+            quote.CartId,
+            quote.CustomerId,
+            quote.Items.Select(item => new RestoreConsumedCartItem(
+                item.ProductId,
+                item.VariantId,
+                item.ProductName,
+                item.VariantSku,
+                item.VariantDescription,
+                item.ImageUrl,
+                item.UnitPrice,
+                item.CompareAtPrice,
+                item.Quantity,
+                item.AvailableStock,
+                item.IsInStock)).ToList(),
+            quote.AppliedVoucherId,
+            quote.AppliedVoucherCode,
+            quote.VoucherDiscount);
     }
 
     private static bool IsOrderOwner(CustomerOrder order, Guid? requestUserId, string? requestEmail)

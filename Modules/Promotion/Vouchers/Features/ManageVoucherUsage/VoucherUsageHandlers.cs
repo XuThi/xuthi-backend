@@ -66,31 +66,52 @@ internal class HoldVoucherUsageHandler(PromotionDbContext db)
         {
             await db.SaveChangesAsync(ct);
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            if (await TryReturnExistingHoldAsync(command, voucher, ct))
+                return new VoucherUsageChangeResult(true);
+
+            await db.Entry(voucher).ReloadAsync(ct);
+
+            if (voucher.MaxUsageCount.HasValue && voucher.CurrentUsageCount >= voucher.MaxUsageCount)
+                throw new InvalidOperationException("Mã giảm giá đã hết lượt sử dụng");
+
+            throw;
+        }
         catch (DbUpdateException)
         {
-            var heldByRetry = await db.VoucherUsages
-                .AsNoTracking()
-                .AnyAsync(u => u.OrderId == command.OrderId
-                    && u.VoucherId == command.VoucherId
-                    && u.Status != VoucherUsageStatus.Released, ct);
-
-            if (heldByRetry)
-            {
-                foreach (var entry in db.ChangeTracker
-                    .Entries<VoucherUsage>()
-                    .Where(e => e.Entity.OrderId == command.OrderId && e.Entity.VoucherId == command.VoucherId))
-                {
-                    entry.State = EntityState.Detached;
-                }
-
-                await db.Entry(voucher).ReloadAsync(ct);
+            if (await TryReturnExistingHoldAsync(command, voucher, ct))
                 return new VoucherUsageChangeResult(true);
-            }
 
             throw;
         }
 
         return new VoucherUsageChangeResult(true);
+    }
+
+    private async Task<bool> TryReturnExistingHoldAsync(
+        HoldVoucherUsageCommand command,
+        Voucher voucher,
+        CancellationToken ct)
+    {
+        var heldByRetry = await db.VoucherUsages
+            .AsNoTracking()
+            .AnyAsync(u => u.OrderId == command.OrderId
+                && u.VoucherId == command.VoucherId
+                && u.Status != VoucherUsageStatus.Released, ct);
+
+        if (!heldByRetry)
+            return false;
+
+        foreach (var entry in db.ChangeTracker
+            .Entries<VoucherUsage>()
+            .Where(e => e.Entity.OrderId == command.OrderId && e.Entity.VoucherId == command.VoucherId))
+        {
+            entry.State = EntityState.Detached;
+        }
+
+        await db.Entry(voucher).ReloadAsync(ct);
+        return true;
     }
 }
 

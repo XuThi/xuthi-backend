@@ -14,6 +14,11 @@ public interface IPaymentService
         DateTimeOffset expiresAt,
         CancellationToken ct = default);
 
+    Task CancelPaymentLinkAsync(
+        long orderCode,
+        string reason,
+        CancellationToken ct = default);
+
     /// <summary>
     /// Verify an incoming PayOS webhook payload and return its domain-shaped payment result.
     /// </summary>

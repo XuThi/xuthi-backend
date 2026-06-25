@@ -166,6 +166,7 @@ namespace Promotion.Infrastructure.Data.Migrations
                         .HasColumnName("CreatedAt");
 
                     b.Property<int>("CurrentUsageCount")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer");
 
                     b.Property<string>("Description")

@@ -39,6 +39,7 @@ public class PromotionDbContext(
             entity.Property(v => v.DiscountValue).HasPrecision(18, 2);
             entity.Property(v => v.MinimumOrderAmount).HasPrecision(18, 2);
             entity.Property(v => v.MaximumDiscountAmount).HasPrecision(18, 2);
+            entity.Property(v => v.CurrentUsageCount).IsConcurrencyToken();
 
             // Store list of product IDs as JSON
             entity.Property(v => v.ApplicableProductIds)

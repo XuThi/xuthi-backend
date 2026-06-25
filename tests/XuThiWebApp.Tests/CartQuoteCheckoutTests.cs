@@ -1007,10 +1007,14 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         services.AddSingleton<TestOrderCreatedEventRecorder>();
         services.AddSingleton<INotificationHandler<OrderCreatedEvent>>(sp =>
             sp.GetRequiredService<TestOrderCreatedEventRecorder>());
+        services.AddSingleton<TestOrderSaveFailureInterceptor>();
 
         services.AddTestDbContext<CartDbContext>(databaseName);
         services.AddTestDbContext<CustomerDbContext>(databaseName);
-        services.AddTestDbContext<OrderDbContext>(databaseName);
+        services.AddTestDbContext<OrderDbContext>(
+            databaseName,
+            (sp, options) => options.AddInterceptors(
+                sp.GetRequiredService<TestOrderSaveFailureInterceptor>()));
         services.AddTestDbContext<ProductCatalogDbContext>(databaseName);
         services.AddTestDbContext<PromotionDbContext>(databaseName);
 
@@ -1041,6 +1045,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     public IReadOnlyList<PaymentLinkAttempt> PaymentLinkAttempts
         => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).Attempts;
 
+    public IReadOnlyList<PaymentLinkCancellation> PaymentLinkCancellations
+        => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).Cancellations;
+
     public IReadOnlyList<string> VerifiedWebhookPayloads
         => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).VerifiedWebhookPayloads;
 
@@ -1049,6 +1056,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public IReadOnlyList<StockRelease> StockReleases
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Releases;
+
+    public IReadOnlyList<StockRestore> StockRestores
+        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Restores;
 
     public IReadOnlyList<StockReservationAttempt> StockReservations
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Reservations;
@@ -1186,10 +1196,37 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         stockReservation.OnReserveAsync = onReserve;
     }
 
+    public void OnConfirmStock(Func<CancellationToken, Task> onConfirm)
+    {
+        var stockReservation = (TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>();
+        stockReservation.OnConfirmAsync = onConfirm;
+    }
+
     public void SetNextWebhookResult(PayOsPaymentResult result)
     {
         var payment = (TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>();
         payment.NextWebhookResult = result;
+    }
+
+    public void OnCreatePaymentLink(Func<CancellationToken, Task<PaymentLinkResult>> onCreate)
+    {
+        var payment = (TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>();
+        payment.OnCreatePaymentLinkAsync = onCreate;
+    }
+
+    public void FailOrderSavesWhen(Func<OrderDbContext, bool> shouldFail)
+    {
+        var interceptor = _scope.ServiceProvider.GetRequiredService<TestOrderSaveFailureInterceptor>();
+        interceptor.ShouldFail = shouldFail;
+    }
+
+    public async Task<TResponse> SendInNewScopeAsync<TResponse>(
+        IRequest<TResponse> request,
+        CancellationToken ct = default)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var sender = scope.ServiceProvider.GetRequiredService<ISender>();
+        return await sender.Send(request, ct);
     }
 
     public async Task ExhaustVoucherAsync(string code, CancellationToken ct = default)
@@ -1260,6 +1297,20 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             order.PaymentSettlementGraceEndsAt);
     }
 
+    public async Task<OrderState> GetOrderStateFreshAsync(Guid orderId, CancellationToken ct = default)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var orderDb = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
+        var order = await orderDb.Orders
+            .AsNoTracking()
+            .SingleAsync(o => o.Id == orderId, ct);
+
+        return new OrderState(
+            order.Status.ToString(),
+            order.PaymentStatus.ToString(),
+            order.CreatedOrderAt);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _scope.DisposeAsync();
@@ -1283,8 +1334,14 @@ internal sealed record OrderPaymentState(
     DateTime? PaymentWindowExpiresAt,
     DateTime? PaymentSettlementGraceEndsAt);
 
+internal sealed record OrderState(
+    string Status,
+    string PaymentStatus,
+    DateTime? CreatedOrderAt);
+
 internal sealed record StockConfirmation(string SessionKey, Guid OrderId);
 internal sealed record StockRelease(string SessionKey);
+internal sealed record StockRestore(string SessionKey, Guid OrderId);
 internal sealed record StockReservationAttempt(
     string SessionKey,
     IReadOnlyList<StockReservationItem> Items,
@@ -1312,17 +1369,21 @@ internal sealed record PaymentLinkAttemptItem(
     int Quantity,
     decimal TotalPrice);
 
+internal sealed record PaymentLinkCancellation(long OrderCode, string Reason);
+
 internal static class TestServiceCollectionExtensions
 {
     public static IServiceCollection AddTestDbContext<TContext>(
         this IServiceCollection services,
-        string databaseName)
+        string databaseName,
+        Action<IServiceProvider, DbContextOptionsBuilder>? configure = null)
         where TContext : DbContext
     {
-        return services.AddDbContext<TContext>(options =>
+        return services.AddDbContext<TContext>((sp, options) =>
         {
             options.UseInMemoryDatabase(databaseName);
             options.ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning));
+            configure?.Invoke(sp, options);
         });
     }
 }
@@ -1332,11 +1393,14 @@ internal sealed class TestStockReservationService : IStockReservationService
     private readonly List<StockReservationAttempt> _reservations = [];
     private readonly List<StockConfirmation> _confirmations = [];
     private readonly List<StockRelease> _releases = [];
+    private readonly List<StockRestore> _restores = [];
 
     public Func<CancellationToken, Task>? OnReserveAsync { get; set; }
+    public Func<CancellationToken, Task>? OnConfirmAsync { get; set; }
     public IReadOnlyList<StockReservationAttempt> Reservations => _reservations;
     public IReadOnlyList<StockConfirmation> Confirmations => _confirmations;
     public IReadOnlyList<StockRelease> Releases => _releases;
+    public IReadOnlyList<StockRestore> Restores => _restores;
 
     public async Task<List<Guid>> ReserveStockAsync(
         string sessionKey,
@@ -1357,6 +1421,9 @@ internal sealed class TestStockReservationService : IStockReservationService
 
     public Task ConfirmReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
     {
+        if (OnConfirmAsync is not null)
+            return OnConfirmAsync(ct);
+
         _confirmations.Add(new StockConfirmation(sessionKey, orderId));
         return Task.CompletedTask;
     }
@@ -1369,6 +1436,7 @@ internal sealed class TestStockReservationService : IStockReservationService
 
     public Task RestoreConfirmedReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
     {
+        _restores.Add(new StockRestore(sessionKey, orderId));
         return Task.CompletedTask;
     }
 
@@ -1381,12 +1449,15 @@ internal sealed class TestStockReservationService : IStockReservationService
 internal sealed class TestPaymentService : IPaymentService
 {
     private readonly List<PaymentLinkAttempt> _attempts = [];
+    private readonly List<PaymentLinkCancellation> _cancellations = [];
     private readonly List<string> _verifiedWebhookPayloads = [];
 
     public IReadOnlyList<PaymentLinkAttempt> Attempts => _attempts;
+    public IReadOnlyList<PaymentLinkCancellation> Cancellations => _cancellations;
     public IReadOnlyList<string> VerifiedWebhookPayloads => _verifiedWebhookPayloads;
     public PayOsPaymentResult NextWebhookResult { get; set; } =
         new(123456789, PayOsPaymentResultStatus.Paid);
+    public Func<CancellationToken, Task<PaymentLinkResult>>? OnCreatePaymentLinkAsync { get; set; }
 
     public Task<PaymentLinkResult> CreatePaymentLinkAsync(
         Order.Orders.Models.CustomerOrder order,
@@ -1395,6 +1466,9 @@ internal sealed class TestPaymentService : IPaymentService
         DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
+        if (OnCreatePaymentLinkAsync is not null)
+            return OnCreatePaymentLinkAsync(ct);
+
         _attempts.Add(new PaymentLinkAttempt(
             order.Id,
             order.OrderNumber,
@@ -1419,10 +1493,44 @@ internal sealed class TestPaymentService : IPaymentService
             "test-payment-link-id"));
     }
 
+    public Task CancelPaymentLinkAsync(long orderCode, string reason, CancellationToken ct = default)
+    {
+        _cancellations.Add(new PaymentLinkCancellation(orderCode, reason));
+        return Task.CompletedTask;
+    }
+
     public Task<PayOsPaymentResult> VerifyWebhookAsync(string rawPayload, CancellationToken ct = default)
     {
         _verifiedWebhookPayloads.Add(rawPayload);
         return Task.FromResult(NextWebhookResult);
+    }
+}
+
+internal sealed class TestOrderSaveFailureInterceptor : SaveChangesInterceptor
+{
+    public Func<OrderDbContext, bool>? ShouldFail { get; set; }
+
+    public override InterceptionResult<int> SavingChanges(
+        DbContextEventData eventData,
+        InterceptionResult<int> result)
+    {
+        ThrowIfConfigured(eventData.Context);
+        return base.SavingChanges(eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfConfigured(eventData.Context);
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+
+    private void ThrowIfConfigured(DbContext? context)
+    {
+        if (context is OrderDbContext orderDb && ShouldFail?.Invoke(orderDb) == true)
+            throw new InvalidOperationException("order save failed");
     }
 }
 

@@ -65,6 +65,14 @@ public class PayOsPaymentService : IPaymentService
         return new PaymentLinkResult(result.CheckoutUrl, orderCode, result.PaymentLinkId);
     }
 
+    public async Task CancelPaymentLinkAsync(
+        long orderCode,
+        string reason,
+        CancellationToken ct = default)
+    {
+        await _client.PaymentRequests.CancelAsync(orderCode, reason);
+    }
+
     public async Task<PayOsPaymentResult> VerifyWebhookAsync(string rawPayload, CancellationToken ct = default)
     {
         var webhookPayload = JsonSerializer.Deserialize<Webhook>(

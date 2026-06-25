@@ -1,5 +1,6 @@
 using Cart.ShoppingCarts.Features.AddItemIntoCart;
 using Cart.ShoppingCarts.Features.ApplyVoucher;
+using Cart.ShoppingCarts.Models;
 using Order.Orders.Features.CancelPendingPayOsOrder;
 using Order.Orders.Features.Checkout;
 using Order.Orders.Features.GetOrder;
@@ -7,6 +8,7 @@ using Order.Orders.Features.GetOrders;
 using Order.Orders.Features.PayOsWebhook;
 using Order.Orders.Models;
 using Order.Orders.OrderIntake;
+using Microsoft.EntityFrameworkCore;
 using Promotion.Vouchers.Features.ManageVoucherUsage;
 using Promotion.Vouchers.Features.ValidateVoucher;
 using Promotion.Vouchers.Models;
@@ -839,6 +841,51 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
+    public async Task PayOS_late_paid_after_grace_webhook_surfaces_operational_anomaly()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-late-paid-webhook-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+        app.SetNextWebhookResult(new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        const string rawPayload = """{"data":{"orderCode":123456789},"signature":"test"}""";
+        var webhook = await app.Sender.Send(new PayOsWebhookCommand(rawPayload));
+
+        Assert.True(webhook.Accepted);
+        Assert.Equal(checkout.OrderId, webhook.OrderId);
+        Assert.Equal(PayOsPaymentResolution.LatePaidAfterGrace, webhook.Resolution);
+        Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal("Failed", order.PaymentStatus);
+        Assert.Null(order.CreatedOrderAt);
+    }
+
+    [Fact]
     public async Task PayOS_start_creates_uncreated_order_attempt_with_live_payment_window_holds_and_link_identity()
     {
         var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
@@ -904,7 +951,7 @@ public sealed class OrderIntakeTests
 
         var stockHold = Assert.Single(app.StockReservations);
         Assert.Equal($"order:{checkout.OrderId}", stockHold.SessionKey);
-        Assert.Equal(TimeSpan.FromMinutes(5), stockHold.Ttl);
+        Assert.Equal(TimeSpan.FromMinutes(6), stockHold.Ttl);
         Assert.Empty(app.StockConfirmations);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
@@ -912,6 +959,130 @@ public sealed class OrderIntakeTests
         Assert.Equal(VoucherUsageStatus.Held, usage.Status);
 
         Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task PayOS_start_failure_preserves_active_cart_and_releases_holds()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYFAIL10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-start-failure-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYFAIL10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "payfail10"));
+        app.OnCreatePaymentLink(_ => throw new InvalidOperationException("PayOS unavailable"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerId: null,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.PayOS,
+                ReturnUrl: "https://shop.example/checkout/return",
+                CancelUrl: "https://shop.example/checkout/cancel"))));
+
+        Assert.Contains("PayOS unavailable", ex.Message);
+
+        var stockHold = Assert.Single(app.StockReservations);
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal(stockHold.SessionKey, release.SessionKey);
+
+        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            app.Sender.Send(new GetOrderQuery(Id: orderId)));
+
+        var cart = await app.GetCartStateAsync(addResult.CartId);
+        Assert.Equal(CartStatus.Active, cart.Status);
+        Assert.Equal(1, cart.ItemCount);
+        Assert.Equal("PAYFAIL10", cart.AppliedVoucherCode);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+    }
+
+    [Fact]
+    public async Task PayOS_start_failure_after_provider_link_cancels_link_restores_cart_and_releases_holds()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYLINKFAIL10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-link-created-then-fails-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYLINKFAIL10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paylinkfail10"));
+
+        app.FailOrderSavesWhen(orderDb => orderDb.ChangeTracker
+            .Entries<CustomerOrder>()
+            .Any(entry => entry.Entity.SourceCartId == addResult.CartId
+                && entry.Entity.PayOsOrderCode.HasValue
+                && entry.State == EntityState.Modified));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerId: null,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.PayOS,
+                ReturnUrl: "https://shop.example/checkout/return",
+                CancelUrl: "https://shop.example/checkout/cancel"))));
+
+        Assert.Contains("order save failed", ex.Message);
+
+        var cancellation = Assert.Single(app.PaymentLinkCancellations);
+        Assert.Equal(123456789, cancellation.OrderCode);
+
+        var stockHold = Assert.Single(app.StockReservations);
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal(stockHold.SessionKey, release.SessionKey);
+
+        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            app.Sender.Send(new GetOrderQuery(Id: orderId)));
+
+        var cart = await app.GetCartStateAsync(addResult.CartId);
+        Assert.Equal(CartStatus.Active, cart.Status);
+        Assert.Equal(1, cart.ItemCount);
+        Assert.Equal("PAYLINKFAIL10", cart.AppliedVoucherCode);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
     }
 
     [Fact]
@@ -1006,7 +1177,7 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
-    public async Task PayOS_checkout_retry_after_settlement_grace_expires_attempt_without_resurrecting_link()
+    public async Task PayOS_order_attempt_retry_after_settlement_grace_expires_attempt_without_resurrecting_link()
     {
         var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
         await using var app = new CommerceTestApp(now);
@@ -1068,7 +1239,7 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
-    public async Task BankTransfer_checkout_becomes_created_order_and_commits_stock_immediately()
+    public async Task BankTransfer_order_intake_becomes_created_order_and_commits_stock_immediately()
     {
         await using var app = new CommerceTestApp();
         var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
@@ -1106,7 +1277,64 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
-    public async Task Manual_payment_checkout_finalizes_voucher_usage_for_the_created_order()
+    public async Task Manual_payment_order_intake_failure_after_consuming_cart_restores_cart_and_releases_holds()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "MANUALFAIL10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "manual-created-order-failure-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("MANUALFAIL10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "manualfail10"));
+        app.OnConfirmStock(_ => throw new InvalidOperationException("stock confirmation failed"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerId: null,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.BankTransfer))));
+
+        Assert.Contains("stock confirmation failed", ex.Message);
+
+        var stockHold = Assert.Single(app.StockReservations);
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal(stockHold.SessionKey, release.SessionKey);
+
+        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            app.Sender.Send(new GetOrderQuery(Id: orderId)));
+
+        var cart = await app.GetCartStateAsync(addResult.CartId);
+        Assert.Equal(CartStatus.Active, cart.Status);
+        Assert.Equal(1, cart.ItemCount);
+        Assert.Equal("MANUALFAIL10", cart.AppliedVoucherCode);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task Manual_payment_order_intake_finalizes_voucher_usage_for_the_created_order()
     {
         await using var app = new CommerceTestApp();
         var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
@@ -1145,6 +1373,111 @@ public sealed class OrderIntakeTests
         Assert.Equal(checkout.OrderId, usage.OrderId);
         Assert.Equal(VoucherUsageStatus.Finalized, usage.Status);
         Assert.NotNull(usage.FinalizedAt);
+    }
+
+    [Fact]
+    public async Task PayOS_paid_result_final_save_failure_restores_confirmed_stock_and_releases_voucher()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        await app.SeedVoucherAsync(
+            code: "PAYSAVEFAIL10",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-paid-save-failure-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var voucherId = await app.GetVoucherIdAsync("PAYSAVEFAIL10");
+        await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "paysavefail10"));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerId: null,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel")));
+
+        app.FailOrderSavesWhen(orderDb => orderDb.ChangeTracker
+            .Entries<CustomerOrder>()
+            .Any(entry => entry.Entity.Id == checkout.OrderId
+                && entry.Entity.CreatedOrderAt is not null
+                && entry.Entity.PaymentStatus == PaymentStatus.Paid
+                && entry.State == EntityState.Modified));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.OrderIntake.ResolvePayOsPaymentResultAsync(
+                new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid)));
+
+        Assert.Contains("order save failed", ex.Message);
+
+        var restore = Assert.Single(app.StockRestores);
+        Assert.Equal($"order:{checkout.OrderId}", restore.SessionKey);
+        Assert.Equal(checkout.OrderId, restore.OrderId);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var usage = Assert.Single(audit.Usages);
+        Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+
+        var order = await app.GetOrderStateFreshAsync(checkout.OrderId);
+        Assert.Equal("Pending", order.Status);
+        Assert.Equal("Pending", order.PaymentStatus);
+        Assert.Null(order.CreatedOrderAt);
+        Assert.Empty(app.CreatedOrderEvents);
+    }
+
+    [Fact]
+    public async Task Concurrent_voucher_holds_do_not_oversell_limited_use_capacity()
+    {
+        await using var app = new CommerceTestApp();
+
+        await app.SeedVoucherAsync(
+            code: "CONCURRENT1",
+            type: VoucherType.FixedAmount,
+            discountValue: 10m,
+            maxUsageCount: 1);
+
+        var voucherId = await app.GetVoucherIdAsync("CONCURRENT1");
+        var firstOrderId = Guid.NewGuid();
+        var secondOrderId = Guid.NewGuid();
+
+        var attempts = new[]
+        {
+            app.SendInNewScopeAsync(new HoldVoucherUsageCommand(voucherId, null, firstOrderId, 10m)),
+            app.SendInNewScopeAsync(new HoldVoucherUsageCommand(voucherId, null, secondOrderId, 10m))
+        };
+
+        var outcomes = await Task.WhenAll(attempts.Select(async attempt =>
+        {
+            try
+            {
+                await attempt;
+                return true;
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("hết lượt"))
+            {
+                return false;
+            }
+        }));
+
+        Assert.Single(outcomes, success => success);
+
+        var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
+        var heldUsage = Assert.Single(audit.Usages, u => u.Status == VoucherUsageStatus.Held);
+        Assert.Contains(heldUsage.OrderId, new[] { firstOrderId, secondOrderId });
     }
 
     [Fact]
