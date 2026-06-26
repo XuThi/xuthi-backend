@@ -26,7 +26,7 @@ public class ProductCatalogDbContext(
     public DbSet<VariantOptionValue> VariantOptionValues => Set<VariantOptionValue>();
     public DbSet<ProductVariantOption> ProductVariantOptions => Set<ProductVariantOption>();
     public DbSet<VariantOptionSelection> VariantOptionSelections => Set<VariantOptionSelection>();
-    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<OrderStockAllocation> OrderStockAllocations => Set<OrderStockAllocation>();
     public DbSet<OrderItemProductReference> OrderItemProductReferences => Set<OrderItemProductReference>();
     public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
 
@@ -179,14 +179,19 @@ public class ProductCatalogDbContext(
             e.Property(x => x.ProductId).HasColumnName("ProductId");
         });
 
-        // StockReservation
-        modelBuilder.Entity<StockReservation>(e =>
+        // OrderStockAllocation
+        modelBuilder.Entity<OrderStockAllocation>(e =>
         {
+            e.ToTable("OrderStockAllocations");
             e.HasKey(r => r.Id);
-            e.HasIndex(r => new { r.VariantId, r.Status });
-            e.HasIndex(r => new { r.SessionKey, r.Status });
-            e.HasIndex(r => new { r.Status, r.ExpiresAt }); // for cleanup query
-            e.Property(r => r.Status).HasConversion<string>();
+            e.HasIndex(r => new { r.OrderId, r.ProductVariantId })
+                .IsUnique()
+                .HasFilter("\"OrderId\" IS NOT NULL");
+            e.HasIndex(r => new { r.ProductVariantId, r.State });
+            e.HasIndex(r => new { r.LegacySessionKey, r.State });
+            e.HasIndex(r => new { r.State, r.HoldExpiresAt }); // for cleanup query
+            e.Property(r => r.State).HasConversion<string>();
+            e.Property(r => r.LegacySessionKey).IsRequired(false);
             e.Ignore(r => r.CreatedBy);
             e.Ignore(r => r.UpdatedBy);
             e.Property(r => r.CreatedAt).HasColumnName("CreatedAt");

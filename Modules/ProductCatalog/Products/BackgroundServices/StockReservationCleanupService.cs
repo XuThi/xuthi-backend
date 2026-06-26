@@ -6,7 +6,7 @@ using ProductCatalog.Products.Services;
 namespace ProductCatalog.Products.BackgroundServices;
 
 /// <summary>
-/// Periodically releases expired stock reservations (TTL = 5 minutes).
+/// Periodically releases expired stock allocations (TTL = 5 minutes).
 /// Runs every 30 seconds.
 /// </summary>
 public class StockReservationCleanupService(
@@ -36,18 +36,18 @@ public class StockReservationCleanupService(
                 var released = await service.CleanupExpiredReservationsAsync(stoppingToken);
                 if (released > 0)
                 {
-                    logger.LogInformation("Released {Count} expired stock reservations", released);
+                    logger.LogInformation("Released {Count} expired stock allocations", released);
                 }
 
-                // Check if there are any remaining active reservations logic directly via dbContext
+                // Check if there are any remaining active allocations logic directly via dbContext
                 var db = scope.ServiceProvider.GetRequiredService<ProductCatalog.Data.ProductCatalogDbContext>();
                 var hasActive = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(
-                    db.StockReservations, r => r.Status == ProductCatalog.Products.Models.StockReservationStatus.Reserved, stoppingToken);
+                    db.OrderStockAllocations, r => r.State == ProductCatalog.Products.Models.OrderStockAllocationState.Held, stoppingToken);
                 
                 if (!hasActive)
                 {
                     RequireCheck = false;
-                    logger.LogInformation("No active reservations remaining. Stock reservation cronjob paused until new reservation.");
+                    logger.LogInformation("No active stock allocations remaining. Stock allocation cleanup paused until a new hold.");
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

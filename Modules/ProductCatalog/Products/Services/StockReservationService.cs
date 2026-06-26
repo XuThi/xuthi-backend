@@ -10,6 +10,7 @@ public class StockReservationService(
     ILogger<StockReservationService> logger) : IStockReservationService
 {
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(5);
+    private const string OrderSessionPrefix = "order:";
 
     public async Task<List<Guid>> ReserveStockAsync(
         string sessionKey,
@@ -17,7 +18,9 @@ public class StockReservationService(
         TimeSpan? ttl = null,
         CancellationToken ct = default)
     {
+        var now = DateTime.UtcNow;
         var expiresAt = DateTime.UtcNow.Add(ttl ?? DefaultTtl);
+        var orderId = TryGetOrderId(sessionKey);
         var requestedItems = items
             .GroupBy(i => i.VariantId)
             .Select(g => (VariantId: g.Key, Quantity: g.Sum(x => x.Quantity)))
@@ -34,20 +37,45 @@ public class StockReservationService(
 
         foreach (var (variantId, quantity) in requestedItems)
         {
+            if (quantity <= 0)
+                throw new InvalidOperationException("Stock allocation quantity must be greater than zero.");
+
             if (!variantSkuMap.TryGetValue(variantId, out var sku))
                 throw new InvalidOperationException($"Variant {variantId} not found");
 
-            // Release any existing reservation for this session + variant before creating a fresh hold.
-            var existingForSession = await db.StockReservations
-                .Where(r => r.VariantId == variantId
-                    && r.SessionKey == sessionKey
-                    && r.Status == StockReservationStatus.Reserved)
+            if (orderId.HasValue)
+            {
+                var existingForOrder = await db.OrderStockAllocations
+                    .SingleOrDefaultAsync(r => r.OrderId == orderId
+                        && r.ProductVariantId == variantId, ct);
+
+                if (existingForOrder is not null)
+                {
+                    if (existingForOrder.State != OrderStockAllocationState.Held
+                        || existingForOrder.Quantity != quantity)
+                    {
+                        throw new InvalidOperationException(
+                            $"Conflicting stock allocation for order {orderId} and variant {variantId}.");
+                    }
+
+                    reservationIds.Add(existingForOrder.Id);
+                    continue;
+                }
+            }
+
+            // Release any existing legacy non-order hold for this session + variant before creating a fresh hold.
+            var existingForSession = await db.OrderStockAllocations
+                .Where(r => !r.OrderId.HasValue
+                    && r.ProductVariantId == variantId
+                    && r.LegacySessionKey == sessionKey
+                    && r.State == OrderStockAllocationState.Held)
                 .ToListAsync(ct);
 
             foreach (var existing in existingForSession)
             {
-                existing.Status = StockReservationStatus.Released;
-                await IncrementStockAsync(existing.VariantId, existing.Quantity, ct);
+                existing.State = OrderStockAllocationState.Released;
+                existing.ReleasedAt ??= now;
+                await IncrementStockAsync(existing.ProductVariantId, existing.Quantity, ct);
             }
 
             // Atomic stock hold. Under concurrent checkout, only transactions that
@@ -70,18 +98,20 @@ public class StockReservationService(
                     $"Khong du ton kho cho SKU {sku}. Chi con {remainingStock} san pham co san.");
             }
 
-            var reservation = new StockReservation
+            var allocation = new OrderStockAllocation
             {
                 Id = Guid.NewGuid(),
-                VariantId = variantId,
+                OrderId = orderId,
+                ProductVariantId = variantId,
                 Quantity = quantity,
-                SessionKey = sessionKey,
-                Status = StockReservationStatus.Reserved,
-                ExpiresAt = expiresAt
+                LegacySessionKey = sessionKey,
+                State = OrderStockAllocationState.Held,
+                HeldAt = now,
+                HoldExpiresAt = expiresAt
             };
 
-            db.StockReservations.Add(reservation);
-            reservationIds.Add(reservation.Id);
+            db.OrderStockAllocations.Add(allocation);
+            reservationIds.Add(allocation.Id);
         }
 
         await db.SaveChangesAsync(ct);
@@ -89,7 +119,7 @@ public class StockReservationService(
             await transaction.CommitAsync(ct);
 
         logger.LogInformation(
-            "Reserved stock for session {SessionKey}: {Count} items, expires at {ExpiresAt}",
+            "Held stock for session {SessionKey}: {Count} items, expires at {ExpiresAt}",
             sessionKey, requestedItems.Count, expiresAt);
 
         // Tell the cleanup background service to start checking again.
@@ -100,45 +130,55 @@ public class StockReservationService(
 
     public async Task ConfirmReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
     {
-        var reservations = await db.StockReservations
-            .Where(r => r.SessionKey == sessionKey && r.Status == StockReservationStatus.Reserved)
+        var sessionOrderId = TryGetOrderId(sessionKey);
+        var allocations = await db.OrderStockAllocations
+            .Where(r => r.State == OrderStockAllocationState.Held
+                && (r.LegacySessionKey == sessionKey
+                    || (sessionOrderId.HasValue && r.OrderId == sessionOrderId)))
             .ToListAsync(ct);
 
-        if (reservations.Count == 0)
+        if (allocations.Count == 0)
         {
-            logger.LogWarning("No active reservations found for session {SessionKey}", sessionKey);
+            logger.LogWarning("No held stock allocations found for session {SessionKey}", sessionKey);
             return;
         }
 
-        foreach (var reservation in reservations)
+        var now = DateTime.UtcNow;
+        foreach (var allocation in allocations)
         {
-            reservation.Status = StockReservationStatus.Confirmed;
-            reservation.OrderId = orderId;
+            allocation.State = OrderStockAllocationState.Committed;
+            allocation.OrderId = orderId;
+            allocation.CommittedAt ??= now;
         }
 
         await db.SaveChangesAsync(ct);
 
         logger.LogInformation(
-            "Confirmed {Count} reservations for session {SessionKey}, order {OrderId}",
-            reservations.Count, sessionKey, orderId);
+            "Committed {Count} stock allocations for session {SessionKey}, order {OrderId}",
+            allocations.Count, sessionKey, orderId);
     }
 
     public async Task ReleaseReservationsAsync(string sessionKey, CancellationToken ct = default)
     {
-        var reservations = await db.StockReservations
-            .Where(r => r.SessionKey == sessionKey && r.Status == StockReservationStatus.Reserved)
+        var sessionOrderId = TryGetOrderId(sessionKey);
+        var allocations = await db.OrderStockAllocations
+            .Where(r => r.State == OrderStockAllocationState.Held
+                && (r.LegacySessionKey == sessionKey
+                    || (sessionOrderId.HasValue && r.OrderId == sessionOrderId)))
             .ToListAsync(ct);
 
-        if (reservations.Count == 0)
+        if (allocations.Count == 0)
             return;
 
         var ownsTransaction = db.Database.CurrentTransaction is null;
         await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
-        foreach (var reservation in reservations)
+        var now = DateTime.UtcNow;
+        foreach (var allocation in allocations)
         {
-            reservation.Status = StockReservationStatus.Released;
-            await IncrementStockAsync(reservation.VariantId, reservation.Quantity, ct);
+            allocation.State = OrderStockAllocationState.Released;
+            allocation.ReleasedAt ??= now;
+            await IncrementStockAsync(allocation.ProductVariantId, allocation.Quantity, ct);
         }
 
         await db.SaveChangesAsync(ct);
@@ -146,28 +186,30 @@ public class StockReservationService(
             await transaction.CommitAsync(ct);
 
         logger.LogInformation(
-            "Released {Count} reservations for session {SessionKey}",
-            reservations.Count, sessionKey);
+            "Released {Count} held stock allocations for session {SessionKey}",
+            allocations.Count, sessionKey);
     }
 
     public async Task RestoreConfirmedReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
     {
-        var reservations = await db.StockReservations
-            .Where(r => r.SessionKey == sessionKey
+        var allocations = await db.OrderStockAllocations
+            .Where(r => (r.LegacySessionKey == sessionKey || r.OrderId == orderId)
                 && r.OrderId == orderId
-                && r.Status == StockReservationStatus.Confirmed)
+                && r.State == OrderStockAllocationState.Committed)
             .ToListAsync(ct);
 
-        if (reservations.Count == 0)
+        if (allocations.Count == 0)
             return;
 
         var ownsTransaction = db.Database.CurrentTransaction is null;
         await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
-        foreach (var reservation in reservations)
+        var now = DateTime.UtcNow;
+        foreach (var allocation in allocations)
         {
-            reservation.Status = StockReservationStatus.Released;
-            await IncrementStockAsync(reservation.VariantId, reservation.Quantity, ct);
+            allocation.State = OrderStockAllocationState.Restored;
+            allocation.RestoredAt ??= now;
+            await IncrementStockAsync(allocation.ProductVariantId, allocation.Quantity, ct);
         }
 
         await db.SaveChangesAsync(ct);
@@ -175,28 +217,31 @@ public class StockReservationService(
             await transaction.CommitAsync(ct);
 
         logger.LogInformation(
-            "Restored stock for {Count} confirmed reservations from order {OrderId}",
-            reservations.Count, orderId);
+            "Restored stock for {Count} committed allocations from order {OrderId}",
+            allocations.Count, orderId);
     }
 
     public async Task<int> CleanupExpiredReservationsAsync(CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
 
-        var expiredReservations = await db.StockReservations
-            .Where(r => r.Status == StockReservationStatus.Reserved && r.ExpiresAt <= now)
+        var expiredAllocations = await db.OrderStockAllocations
+            .Where(r => r.State == OrderStockAllocationState.Held
+                && r.HoldExpiresAt.HasValue
+                && r.HoldExpiresAt <= now)
             .ToListAsync(ct);
 
-        if (expiredReservations.Count == 0)
+        if (expiredAllocations.Count == 0)
             return 0;
 
         var ownsTransaction = db.Database.CurrentTransaction is null;
         await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
-        foreach (var reservation in expiredReservations)
+        foreach (var allocation in expiredAllocations)
         {
-            reservation.Status = StockReservationStatus.Released;
-            await IncrementStockAsync(reservation.VariantId, reservation.Quantity, ct);
+            allocation.State = OrderStockAllocationState.Released;
+            allocation.ReleasedAt ??= now;
+            await IncrementStockAsync(allocation.ProductVariantId, allocation.Quantity, ct);
         }
 
         await db.SaveChangesAsync(ct);
@@ -204,9 +249,9 @@ public class StockReservationService(
             await transaction.CommitAsync(ct);
 
         logger.LogInformation(
-            "Cleaned up {Count} expired stock reservations", expiredReservations.Count);
+            "Cleaned up {Count} expired stock allocations", expiredAllocations.Count);
 
-        return expiredReservations.Count;
+        return expiredAllocations.Count;
     }
 
     private Task<int> IncrementStockAsync(Guid variantId, int quantity, CancellationToken ct)
@@ -215,5 +260,15 @@ public class StockReservationService(
             .Where(v => v.Id == variantId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(v => v.StockQuantity, v => v.StockQuantity + quantity), ct);
+    }
+
+    private static Guid? TryGetOrderId(string sessionKey)
+    {
+        if (!sessionKey.StartsWith(OrderSessionPrefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return Guid.TryParse(sessionKey[OrderSessionPrefix.Length..], out var orderId)
+            ? orderId
+            : null;
     }
 }
