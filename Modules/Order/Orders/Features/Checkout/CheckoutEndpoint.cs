@@ -1,10 +1,12 @@
 using Mapster;
+using System.Security.Claims;
+using System.Text.Json.Serialization;
 
 namespace Order.Orders.Features.Checkout;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public record CheckoutRequest(
     Guid CartId,
-    Guid? CustomerId,
 
     // Customer info
     string CustomerName,
@@ -31,9 +33,16 @@ public class CheckoutEndpoint : ICarterModule
 {
     public void AddRoutes(IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/orders/checkout", async (CheckoutRequest request, ISender sender) =>
+        app.MapPost("/api/orders/checkout", async (
+            CheckoutRequest request,
+            ClaimsPrincipal principal,
+            ISender sender) =>
         {
-            var command = new CheckoutCommand(request);
+            var externalUserId = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrWhiteSpace(externalUserId))
+                return Results.Unauthorized();
+
+            var command = new CheckoutCommand(request, externalUserId);
 
             var result = await sender.Send(command);
 
@@ -43,7 +52,10 @@ public class CheckoutEndpoint : ICarterModule
         })
         .WithName("Checkout")
         .Produces<CheckoutResponse>(StatusCodes.Status201Created)
+        .Produces(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status409Conflict)
         .ProducesProblem(StatusCodes.Status400BadRequest)
+        .RequireAuthorization("Authenticated")
         .WithSummary("Checkout")
         .WithDescription("Create a new order from cart")
         .WithTags("Orders");

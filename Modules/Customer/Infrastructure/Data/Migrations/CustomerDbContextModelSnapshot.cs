@@ -130,7 +130,7 @@ namespace Customer.Infrastructure.Data.Migrations
                     b.Property<int>("TotalOrders")
                         .HasColumnType("integer");
 
-                    b.Property<decimal>("TotalSpent")
+                    b.Property<decimal>("TotalLoyaltySpend")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
@@ -145,17 +145,21 @@ namespace Customer.Infrastructure.Data.Migrations
                     b.HasIndex("ExternalUserId")
                         .IsUnique();
 
-                    b.ToTable("Customers");
+                    b.ToTable("Customers", t =>
+                        {
+                            t.HasCheckConstraint("CK_Customers_LoyaltyPoints_NonNegative", "\"LoyaltyPoints\" >= 0");
+
+                            t.HasCheckConstraint("CK_Customers_TotalLoyaltySpend_NonNegative", "\"TotalLoyaltySpend\" >= 0");
+
+                            t.HasCheckConstraint("CK_Customers_TotalOrders_NonNegative", "\"TotalOrders\" >= 0");
+                        });
                 });
 
-            modelBuilder.Entity("Customer.Customers.Models.PointsHistory", b =>
+            modelBuilder.Entity("Customer.Customers.Models.LoyaltyHistory", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
-
-                    b.Property<int>("BalanceAfter")
-                        .HasColumnType("integer");
 
                     b.Property<DateTime?>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -169,22 +173,55 @@ namespace Customer.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
-                    b.Property<int>("Points")
+                    b.Property<decimal?>("LoyaltySpendDelta")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("OrderNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("PointsBalanceAfter")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PointsDelta")
                         .HasColumnType("integer");
 
                     b.Property<Guid?>("RelatedOrderId")
                         .HasColumnType("uuid");
+
+                    b.Property<int>("TierAfter")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("TotalLoyaltySpendAfter")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("TotalOrdersAfter")
+                        .HasColumnType("integer");
 
                     b.Property<int>("Type")
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CreatedAt");
+                    b.HasIndex("CustomerId", "OccurredAt");
 
-                    b.HasIndex("CustomerId");
+                    b.HasIndex("RelatedOrderId", "Type")
+                        .IsUnique()
+                        .HasFilter("\"RelatedOrderId\" IS NOT NULL AND \"Type\" IN (1, 6)");
 
-                    b.ToTable("PointsHistory");
+                    b.ToTable("LoyaltyHistory", t =>
+                        {
+                            t.HasCheckConstraint("CK_LoyaltyHistory_PointsBalanceAfter_NonNegative", "\"PointsBalanceAfter\" >= 0");
+
+                            t.HasCheckConstraint("CK_LoyaltyHistory_TotalLoyaltySpendAfter_NonNegative", "\"TotalLoyaltySpendAfter\" >= 0");
+
+                            t.HasCheckConstraint("CK_LoyaltyHistory_TotalOrdersAfter_NonNegative", "\"TotalOrdersAfter\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("Customer.Customers.Models.CustomerAddress", b =>
@@ -198,7 +235,7 @@ namespace Customer.Infrastructure.Data.Migrations
                     b.Navigation("Customer");
                 });
 
-            modelBuilder.Entity("Customer.Customers.Models.PointsHistory", b =>
+            modelBuilder.Entity("Customer.Customers.Models.LoyaltyHistory", b =>
                 {
                     b.HasOne("Customer.Customers.Models.CustomerProfile", "Customer")
                         .WithMany()

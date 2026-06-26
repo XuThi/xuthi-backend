@@ -10,7 +10,7 @@ public record GetCustomersDto(
     string Email, 
     string? Phone, 
     string Tier, 
-    decimal TotalSpent, 
+    decimal TotalLoyaltySpend,
     int TotalOrders, 
     DateTime? CreatedAt);
 
@@ -42,7 +42,7 @@ internal class GetCustomersHandler(CustomerDbContext dbContext)
                 c.Email,
                 c.Phone,
                 c.Tier.ToString(),
-                c.TotalSpent,
+                c.TotalLoyaltySpend,
                 c.TotalOrders,
                 c.CreatedAt))
             .ToListAsync(cancellationToken);

@@ -29,7 +29,7 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
                 FullName = query.FullName,
                 Tier = CustomerTier.Standard,
                 LoyaltyPoints = 0,
-                TotalSpent = 0,
+                TotalLoyaltySpend = 0,
                 TotalOrders = 0,
                 AcceptsMarketing = false,
                 AcceptsSms = false,
@@ -80,6 +80,6 @@ internal class GetOrCreateCustomerHandler(CustomerDbContext db)
 
     private static CustomerDto MapToDto(CustomerProfile c) => new(
         c.Id, c.ExternalUserId, c.Email, c.FullName, c.Phone,
-        c.Tier, c.LoyaltyPoints, c.TotalSpent, c.TotalOrders,
+        c.Tier, c.LoyaltyPoints, c.TotalLoyaltySpend, c.TotalOrders,
         c.TierDiscountPercentage, c.CreatedAt ?? DateTime.MinValue, c.LastOrderAt);
 }

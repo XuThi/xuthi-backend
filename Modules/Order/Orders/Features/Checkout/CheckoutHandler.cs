@@ -1,8 +1,12 @@
+using Contracts;
+using Core.Exceptions;
 using Order.Orders.OrderIntake;
 
 namespace Order.Orders.Features.Checkout;
 
-public record CheckoutCommand(CheckoutRequest Request) : ICommand<CheckoutResult>;
+public record CheckoutCommand(
+    CheckoutRequest Request,
+    string AuthenticatedExternalUserId) : ICommand<CheckoutResult>;
 public record CheckoutResult(Guid OrderId, string OrderNumber, decimal Total, string Status, string? PaymentUrl = null);
 
 public class CheckoutCommandValidator : AbstractValidator<CheckoutCommand>
@@ -25,16 +29,22 @@ public class CheckoutCommandValidator : AbstractValidator<CheckoutCommand>
     }
 }
 
-internal class CheckoutHandler(IOrderIntake orderIntake)
+internal class CheckoutHandler(IOrderIntake orderIntake, ISender sender)
     : ICommandHandler<CheckoutCommand, CheckoutResult>
 {
     public async Task<CheckoutResult> Handle(CheckoutCommand command, CancellationToken cancellationToken)
     {
         var req = command.Request;
+        var customerId = await sender.Send(
+            new GetCustomerByExternalIdQuery(command.AuthenticatedExternalUserId),
+            cancellationToken);
+
+        if (!customerId.HasValue)
+            throw new ConflictException("Customer profile could not be resolved for the authenticated shopper.");
 
         var result = await orderIntake.StartOrderAttemptAsync(new StartOrderAttempt(
             req.CartId,
-            req.CustomerId,
+            customerId.Value,
             req.CustomerName,
             req.CustomerEmail,
             req.CustomerPhone,

@@ -33,6 +33,7 @@ public class OrderDbContext(
             entity.HasIndex(e => e.PayOsOrderCode)
                 .IsUnique()
                 .HasFilter("\"PayOsOrderCode\" IS NOT NULL");
+            entity.Property(e => e.CustomerId).IsRequired();
 
             // Base class property mappings
             entity.Ignore(e => e.CreatedBy);

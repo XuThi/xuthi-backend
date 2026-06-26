@@ -6,8 +6,9 @@ namespace Core.DDD;
 
 /// <summary>
 /// EF Core SaveChanges interceptor that dispatches domain events from aggregates
-/// after changes are persisted. This ensures domain events are only published
-/// when the aggregate state has been successfully saved.
+/// after a DbContext SaveChanges operation succeeds. Events are published
+/// in-process; this is not a durable outbox and does not coordinate transactions
+/// across multiple DbContext instances.
 /// </summary>
 public class DispatchDomainEventsInterceptor(IMediator mediator) : SaveChangesInterceptor
 {

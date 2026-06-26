@@ -11,16 +11,24 @@ using Cart.ShoppingCarts.Features.SyncCartPrices;
 using Cart.ShoppingCarts.Features.UpdateCartItem;
 using Cart.ShoppingCarts.Models;
 using Core.Caching;
+using Core.Exceptions;
+using Core.Exceptions.Handler;
 using Core.Extensions;
 using Customer;
+using Customer.Customers.Models;
 using Customer.Data;
 using FluentValidation;
 using MediatR;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Order.Orders.Events;
+using Contracts;
 using Order;
 using Order.Data;
 using Order.Orders.Features.Checkout;
@@ -244,7 +252,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkoutWithVoucher = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -252,7 +259,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         Assert.Equal(170m, checkoutWithVoucher.Total);
         var voucherOrder = await app.Sender.Send(new GetOrderQuery(Id: checkoutWithVoucher.OrderId));
@@ -279,7 +286,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkoutWithoutVoucher = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: secondAdd.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -287,7 +293,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         Assert.Equal(200m, checkoutWithoutVoucher.Total);
         var noVoucherOrder = await app.Sender.Send(new GetOrderQuery(Id: checkoutWithoutVoucher.OrderId));
@@ -379,7 +385,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -387,7 +392,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         Assert.Equal(75m, checkout.Total);
         Assert.Equal("Pending", checkout.Status);
@@ -417,6 +422,115 @@ public sealed class CartQuoteCheckoutTests
     }
 
     [Fact]
+    public async Task Checkout_uses_authenticated_customer_profile_for_the_order_attempt()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "authenticated-customer-checkout-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(
+            new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.BankTransfer),
+            app.DefaultExternalUserId));
+
+        Assert.Equal(app.DefaultCustomerId, await app.GetOrderCustomerIdAsync(checkout.OrderId));
+    }
+
+    [Fact]
+    public async Task Checkout_without_existing_customer_profile_returns_conflict_without_creating_order()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "missing-customer-profile-checkout-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var ex = await Assert.ThrowsAsync<ConflictException>(() =>
+            app.Sender.Send(new CheckoutCommand(
+                new CheckoutRequest(
+                    CartId: addResult.CartId,
+                    CustomerName: "Jane Shopper",
+                    CustomerEmail: "jane@example.com",
+                    CustomerPhone: "0900000000",
+                    ShippingAddress: "1 Test Street",
+                    ShippingCity: "Ha Noi",
+                    ShippingWard: "Ward 1",
+                    ShippingNote: null,
+                    PaymentMethod: PaymentMethod.BankTransfer),
+                "missing-auth-user")));
+
+        Assert.Contains("Customer profile", ex.Message);
+        var orders = await app.Sender.Send(new GetOrdersQuery(PageSize: 100));
+        Assert.Empty(orders.Orders);
+    }
+
+    [Fact]
+    public async Task Checkout_missing_customer_profile_conflict_maps_to_http_409_problem_details()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "missing-customer-profile-api-boundary-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var conflict = await Assert.ThrowsAsync<ConflictException>(() =>
+            app.Sender.Send(new CheckoutCommand(
+                new CheckoutRequest(
+                    CartId: addResult.CartId,
+                    CustomerName: "Jane Shopper",
+                    CustomerEmail: "jane@example.com",
+                    CustomerPhone: "0900000000",
+                    ShippingAddress: "1 Test Street",
+                    ShippingCity: "Ha Noi",
+                    ShippingWard: "Ward 1",
+                    ShippingNote: null,
+                    PaymentMethod: PaymentMethod.BankTransfer),
+                "missing-auth-user")));
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/orders/checkout";
+        context.Response.Body = new MemoryStream();
+        var exceptionHandler = new CustomExceptionHandler(
+            NullLogger<CustomExceptionHandler>.Instance);
+
+        var handled = await exceptionHandler.TryHandleAsync(context, conflict, CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal(StatusCodes.Status409Conflict, context.Response.StatusCode);
+
+        context.Response.Body.Position = 0;
+        var problem = await JsonSerializer.DeserializeAsync<JsonElement>(
+            context.Response.Body,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal("ConflictException", problem.GetProperty("title").GetString());
+        Assert.Equal(StatusCodes.Status409Conflict, problem.GetProperty("status").GetInt32());
+        Assert.Contains("Customer profile", problem.GetProperty("detail").GetString());
+        Assert.Equal("/api/orders/checkout", problem.GetProperty("instance").GetString());
+    }
+
+    [Fact]
     public async Task Free_shipping_voucher_zeroes_checkout_shipping_without_item_discount()
     {
         await using var app = new CommerceTestApp();
@@ -443,7 +557,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -451,7 +564,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ho Chi Minh City",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.CashOnDelivery)));
+            PaymentMethod: PaymentMethod.CashOnDelivery), app.DefaultExternalUserId));
 
         Assert.Equal(100m, checkout.Total);
 
@@ -479,7 +592,6 @@ public sealed class CartQuoteCheckoutTests
         var ex = await Assert.ThrowsAsync<ValidationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: null,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -487,7 +599,7 @@ public sealed class CartQuoteCheckoutTests
                 ShippingCity: "Ha Noi",
                 ShippingWard: "Ward 1",
                 ShippingNote: null,
-                PaymentMethod: PaymentMethod.PayOS))));
+                PaymentMethod: PaymentMethod.PayOS), app.DefaultExternalUserId)));
 
         Assert.Contains("ReturnUrl", ex.Message);
         Assert.Contains("CancelUrl", ex.Message);
@@ -529,7 +641,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -539,7 +650,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return?source=payos",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         Assert.Equal(230m, checkout.Total);
         Assert.Equal("Pending", checkout.Status);
@@ -598,7 +709,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -606,7 +716,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         Assert.Equal(100m, checkout.Total);
         Assert.Null(checkout.PaymentUrl);
@@ -614,14 +724,12 @@ public sealed class CartQuoteCheckoutTests
     }
 
     [Fact]
-    public async Task Checkout_rejects_legacy_item_payload_without_cart_id()
+    public void Checkout_request_rejects_legacy_customer_id_payload()
     {
-        await using var app = new CommerceTestApp();
-        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
-
-        var legacyPayload = $$"""
+        var legacyPayload = """
             {
-              "customerId": null,
+              "cartId": "2b886a1d-5700-4f1a-9efd-f9928fd6fa55",
+              "customerId": "1435c7eb-4791-4a76-a49f-4b87363448c6",
               "customerName": "Legacy Shopper",
               "customerEmail": "legacy@example.com",
               "customerPhone": "0900000000",
@@ -629,37 +737,16 @@ public sealed class CartQuoteCheckoutTests
               "shippingCity": "Ha Noi",
               "shippingWard": "Ward 1",
               "shippingNote": null,
-              "paymentMethod": 2,
-              "voucherCode": "CLIENT25",
-              "items": [
-                {
-                  "productId": "{{item.ProductId}}",
-                  "variantId": "{{item.VariantId}}",
-                  "quantity": 1,
-                  "unitPrice": 1,
-                  "totalPrice": 1
-                }
-              ],
-              "subtotal": 1,
-              "discountAmount": 25,
-              "total": -24
+              "paymentMethod": 2
             }
             """;
 
-        var request = JsonSerializer.Deserialize<CheckoutRequest>(
-            legacyPayload,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        var ex = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<CheckoutRequest>(
+                legacyPayload,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }));
 
-        Assert.NotNull(request);
-        Assert.Equal(Guid.Empty, request!.CartId);
-
-        var ex = await Assert.ThrowsAsync<ValidationException>(() =>
-            app.Sender.Send(new CheckoutCommand(request)));
-
-        Assert.Contains("CartId", ex.Message);
-
-        var orders = await app.Sender.Send(new GetOrdersQuery(PageSize: 100));
-        Assert.Empty(orders.Orders);
+        Assert.Contains("customerId", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -686,7 +773,6 @@ public sealed class CartQuoteCheckoutTests
 
         await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -694,7 +780,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         var persisted = await app.GetCartStateAsync(addResult.CartId);
         Assert.Equal(CartStatus.Consumed, persisted.Status);
@@ -751,7 +837,7 @@ public sealed class CartQuoteCheckoutTests
         await using var app = new CommerceTestApp();
         var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
         const string sessionId = "merge-before-checkout-session";
-        var customerId = Guid.NewGuid();
+        var customerId = app.DefaultCustomerId;
 
         var addResult = await app.Sender.Send(new AddToCartCommand(
             SessionId: sessionId,
@@ -759,20 +845,6 @@ public sealed class CartQuoteCheckoutTests
             ProductId: item.ProductId,
             VariantId: item.VariantId,
             Quantity: 1));
-
-        var mismatch = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
-                CartId: addResult.CartId,
-                CustomerId: customerId,
-                CustomerName: "Merge Customer",
-                CustomerEmail: "merge@example.test",
-                CustomerPhone: "0900000000",
-                ShippingAddress: "123 Test Street",
-                ShippingCity: "Ho Chi Minh City",
-                ShippingWard: "Ward 1",
-                ShippingNote: null,
-                PaymentMethod: PaymentMethod.BankTransfer))));
-        Assert.Contains("CustomerId", mismatch.Message);
 
         var merged = await app.Sender.Send(new MergeCartsCommand(sessionId, customerId));
 
@@ -784,7 +856,6 @@ public sealed class CartQuoteCheckoutTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: merged.Cart.Id,
-            CustomerId: customerId,
             CustomerName: "Merge Customer",
             CustomerEmail: "merge@example.test",
             CustomerPhone: "0900000000",
@@ -792,7 +863,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ho Chi Minh City",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         Assert.Equal(100m, checkout.Total);
         var consumed = await app.GetCartStateAsync(merged.Cart.Id);
@@ -826,7 +897,6 @@ public sealed class CartQuoteCheckoutTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: requestCustomerId,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -834,7 +904,7 @@ public sealed class CartQuoteCheckoutTests
                 ShippingCity: "Ha Noi",
                 ShippingWard: "Ward 1",
                 ShippingNote: null,
-                PaymentMethod: PaymentMethod.BankTransfer))));
+                PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId)));
 
         Assert.Contains("CustomerId", ex.Message);
 
@@ -869,7 +939,6 @@ public sealed class CartQuoteCheckoutTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: null,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -877,7 +946,7 @@ public sealed class CartQuoteCheckoutTests
                 ShippingCity: "Ha Noi",
                 ShippingWard: "Ward 1",
                 ShippingNote: null,
-                PaymentMethod: PaymentMethod.BankTransfer))));
+                PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId)));
 
         Assert.Contains("hết lượt", ex.Message);
 
@@ -900,7 +969,7 @@ public sealed class CartQuoteCheckoutTests
     {
         await using var app = new CommerceTestApp();
         var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
-        var cartCustomerId = Guid.NewGuid();
+        var cartCustomerId = app.DefaultCustomerId;
         var otherCustomerId = Guid.NewGuid();
 
         await app.SeedVoucherAsync(
@@ -921,7 +990,6 @@ public sealed class CartQuoteCheckoutTests
 
         await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: cartCustomerId,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -929,7 +997,7 @@ public sealed class CartQuoteCheckoutTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         var sameCustomer = await app.Sender.Send(new ValidateVoucherQuery(
             Code: "ONE-CUSTOMER",
@@ -987,6 +1055,8 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     private readonly ServiceProvider _provider;
     private readonly AsyncServiceScope _scope;
     private int _productCounter;
+    public string DefaultExternalUserId => "checkout-test-user";
+    public Guid DefaultCustomerId { get; }
 
     public CommerceTestApp(
         DateTimeOffset? utcNow = null,
@@ -995,7 +1065,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         var services = new ServiceCollection();
         var databaseName = $"commerce-tests-{Guid.NewGuid():N}";
 
-        services.AddLogging();
+        var loggerProvider = new TestLoggerProvider();
+        services.AddSingleton(loggerProvider);
+        services.AddLogging(builder => builder.AddProvider(loggerProvider));
         services.AddMemoryCache();
         services.AddSingleton<ICacheInvalidator, MemoryCacheInvalidator>();
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
@@ -1007,16 +1079,24 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         services.AddSingleton<TestOrderCreatedEventRecorder>();
         services.AddSingleton<INotificationHandler<OrderCreatedEvent>>(sp =>
             sp.GetRequiredService<TestOrderCreatedEventRecorder>());
+        services.AddSingleton<TestCustomerOrderOutcomeRecorder>();
+        services.AddSingleton<INotificationHandler<CustomerOrderOutcomeOccurred>>(sp =>
+            sp.GetRequiredService<TestCustomerOrderOutcomeRecorder>());
         services.AddSingleton<TestOrderSaveFailureInterceptor>();
+        services.AddSingleton<TestCustomerLoyaltySaveFailureInterceptor>();
 
         services.AddTestDbContext<CartDbContext>(databaseName);
-        services.AddTestDbContext<CustomerDbContext>(databaseName);
+        services.AddTestDbContext<CustomerDbContext>(
+            databaseName,
+            (sp, options) => options.AddInterceptors(
+                sp.GetRequiredService<TestCustomerLoyaltySaveFailureInterceptor>()));
         services.AddTestDbContext<OrderDbContext>(
             databaseName,
             (sp, options) => options.AddInterceptors(
                 sp.GetRequiredService<TestOrderSaveFailureInterceptor>()));
         services.AddTestDbContext<ProductCatalogDbContext>(databaseName);
         services.AddTestDbContext<PromotionDbContext>(databaseName);
+        services.AddScoped<Customer.Customers.Features.RecordCustomerOrderOutcome.CustomerLoyaltyOutcomeRecorder>();
 
         services.AddMediatRWithAssemblies(
             typeof(CartModuleMarker).Assembly,
@@ -1036,9 +1116,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
         _provider = services.BuildServiceProvider(validateScopes: true);
         _scope = _provider.CreateAsyncScope();
+        DefaultCustomerId = SeedCustomerProfile(DefaultExternalUserId);
     }
 
     public ISender Sender => _scope.ServiceProvider.GetRequiredService<ISender>();
+
+    public IPublisher Publisher => _scope.ServiceProvider.GetRequiredService<IPublisher>();
 
     public IOrderIntake OrderIntake => _scope.ServiceProvider.GetRequiredService<IOrderIntake>();
 
@@ -1066,8 +1149,30 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     public IReadOnlyList<OrderCreatedEvent> CreatedOrderEvents
         => _scope.ServiceProvider.GetRequiredService<TestOrderCreatedEventRecorder>().Events;
 
+    public IReadOnlyList<CustomerOrderOutcomeOccurred> CustomerOrderOutcomeEvents
+        => _scope.ServiceProvider.GetRequiredService<TestCustomerOrderOutcomeRecorder>().Events;
+
     public ManualTimeProvider TimeProvider
         => _scope.ServiceProvider.GetRequiredService<ManualTimeProvider>();
+
+    public IReadOnlyList<TestLogEntry> LogEntries
+        => _scope.ServiceProvider.GetRequiredService<TestLoggerProvider>().Entries;
+
+    public Guid SeedCustomerProfile(string externalUserId, Guid? customerId = null)
+    {
+        var db = _scope.ServiceProvider.GetRequiredService<CustomerDbContext>();
+        var id = customerId ?? Guid.NewGuid();
+        db.Customers.Add(new CustomerProfile
+        {
+            Id = id,
+            ExternalUserId = externalUserId,
+            Email = $"{externalUserId}@example.test",
+            FullName = "Test Customer",
+            Phone = "0900000000"
+        });
+        db.SaveChanges();
+        return id;
+    }
 
     public async Task<CatalogItem> SeedCatalogItemAsync(decimal price, int stockQuantity, Guid? categoryId = null)
     {
@@ -1220,6 +1325,18 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         interceptor.ShouldFail = shouldFail;
     }
 
+    public void RaceNextCustomerLoyaltyHistorySave()
+    {
+        var interceptor = _scope.ServiceProvider.GetRequiredService<TestCustomerLoyaltySaveFailureInterceptor>();
+        interceptor.RaceNextLoyaltyHistorySave();
+    }
+
+    public void FailNextCustomerLoyaltyHistorySave(Exception exception)
+    {
+        var interceptor = _scope.ServiceProvider.GetRequiredService<TestCustomerLoyaltySaveFailureInterceptor>();
+        interceptor.FailNextLoyaltyHistorySave(exception);
+    }
+
     public async Task<TResponse> SendInNewScopeAsync<TResponse>(
         IRequest<TResponse> request,
         CancellationToken ct = default)
@@ -1309,6 +1426,43 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             order.Status.ToString(),
             order.PaymentStatus.ToString(),
             order.CreatedOrderAt);
+    }
+
+    public async Task<Guid?> GetOrderCustomerIdAsync(Guid orderId, CancellationToken ct = default)
+    {
+        var orderDb = _scope.ServiceProvider.GetRequiredService<OrderDbContext>();
+        return await orderDb.Orders
+            .Where(o => o.Id == orderId)
+            .Select(o => (Guid?)o.CustomerId)
+            .SingleAsync(ct);
+    }
+
+    public async Task<List<LoyaltyHistory>> GetLoyaltyHistoryAsync(Guid customerId, CancellationToken ct = default)
+    {
+        var customerDb = _scope.ServiceProvider.GetRequiredService<CustomerDbContext>();
+        return await customerDb.LoyaltyHistory
+            .AsNoTracking()
+            .Where(h => h.CustomerId == customerId)
+            .OrderByDescending(h => h.OccurredAt)
+            .ToListAsync(ct);
+    }
+
+    public async Task AddLoyaltyHistoryAsync(LoyaltyHistory history, CancellationToken ct = default)
+    {
+        var customerDb = _scope.ServiceProvider.GetRequiredService<CustomerDbContext>();
+        customerDb.LoyaltyHistory.Add(history);
+        await customerDb.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateCustomerProfileAsync(
+        Guid customerId,
+        Action<CustomerProfile> configure,
+        CancellationToken ct = default)
+    {
+        var customerDb = _scope.ServiceProvider.GetRequiredService<CustomerDbContext>();
+        var customer = await customerDb.Customers.SingleAsync(c => c.Id == customerId, ct);
+        configure(customer);
+        await customerDb.SaveChangesAsync(ct);
     }
 
     public async ValueTask DisposeAsync()
@@ -1534,6 +1688,119 @@ internal sealed class TestOrderSaveFailureInterceptor : SaveChangesInterceptor
     }
 }
 
+internal sealed class TestCustomerLoyaltySaveFailureInterceptor(IServiceScopeFactory scopeFactory) : SaveChangesInterceptor
+{
+    private bool _raceNextLoyaltyHistorySave;
+    private bool _seedingRaceWinner;
+    private Exception? _nextLoyaltyHistorySaveException;
+
+    public void RaceNextLoyaltyHistorySave()
+    {
+        _raceNextLoyaltyHistorySave = true;
+    }
+
+    public void FailNextLoyaltyHistorySave(Exception exception)
+    {
+        _nextLoyaltyHistorySaveException = exception;
+    }
+
+    public override InterceptionResult<int> SavingChanges(
+        DbContextEventData eventData,
+        InterceptionResult<int> result)
+    {
+        ThrowIfConfigured(eventData.Context);
+        return base.SavingChanges(eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfConfigured(eventData.Context);
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+
+    private void ThrowIfConfigured(DbContext? context)
+    {
+        if (_seedingRaceWinner || context is not CustomerDbContext customerDb)
+            return;
+
+        var addedHistory = customerDb.ChangeTracker
+            .Entries<LoyaltyHistory>()
+            .FirstOrDefault(e => e.State == EntityState.Added
+                && e.Entity.RelatedOrderId.HasValue
+                && (e.Entity.Type == LoyaltyTransactionType.Awarded
+                    || e.Entity.Type == LoyaltyTransactionType.Reversed));
+
+        if (addedHistory is null)
+            return;
+
+        if (_nextLoyaltyHistorySaveException is { } exception)
+        {
+            _nextLoyaltyHistorySaveException = null;
+            throw exception;
+        }
+
+        if (!_raceNextLoyaltyHistorySave)
+            return;
+
+        _raceNextLoyaltyHistorySave = false;
+        SeedRaceWinner(addedHistory.Entity);
+
+        throw new DbUpdateException(
+            "Simulated duplicate key on IX_LoyaltyHistory_RelatedOrderId_Type.",
+            new PostgresException(
+                "duplicate key value violates unique constraint",
+                "ERROR",
+                "ERROR",
+                PostgresErrorCodes.UniqueViolation));
+    }
+
+    private void SeedRaceWinner(LoyaltyHistory source)
+    {
+        _seedingRaceWinner = true;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<CustomerDbContext>();
+            var customer = db.Customers.Single(c => c.Id == source.CustomerId);
+
+            customer.LoyaltyPoints = source.PointsBalanceAfter;
+            customer.TotalLoyaltySpend = source.TotalLoyaltySpendAfter;
+            customer.TotalOrders = source.TotalOrdersAfter;
+            customer.Tier = source.TierAfter;
+            customer.LastOrderAt = source.Type == LoyaltyTransactionType.Awarded
+                ? source.OccurredAt
+                : null;
+
+            db.LoyaltyHistory.Add(new LoyaltyHistory
+            {
+                Id = Guid.NewGuid(),
+                CustomerId = source.CustomerId,
+                Type = source.Type,
+                PointsDelta = source.PointsDelta,
+                PointsBalanceAfter = source.PointsBalanceAfter,
+                LoyaltySpendDelta = source.LoyaltySpendDelta,
+                TotalLoyaltySpendAfter = source.TotalLoyaltySpendAfter,
+                TotalOrdersAfter = source.TotalOrdersAfter,
+                TierAfter = source.TierAfter,
+                OccurredAt = source.OccurredAt,
+                Description = source.Description,
+                RelatedOrderId = source.RelatedOrderId,
+                OrderNumber = source.OrderNumber,
+                CreatedAt = source.CreatedAt
+            });
+
+            db.SaveChanges();
+        }
+        finally
+        {
+            _seedingRaceWinner = false;
+        }
+    }
+}
+
 internal sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
 {
     private DateTimeOffset _utcNow = utcNow;
@@ -1556,6 +1823,72 @@ internal sealed class TestOrderCreatedEventRecorder : INotificationHandler<Order
     {
         _events.Add(notification);
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class TestCustomerOrderOutcomeRecorder : INotificationHandler<CustomerOrderOutcomeOccurred>
+{
+    private readonly List<CustomerOrderOutcomeOccurred> _events = [];
+
+    public IReadOnlyList<CustomerOrderOutcomeOccurred> Events => _events;
+
+    public Task Handle(CustomerOrderOutcomeOccurred notification, CancellationToken cancellationToken)
+    {
+        _events.Add(notification);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed record TestLogEntry(
+    string CategoryName,
+    LogLevel Level,
+    EventId EventId,
+    string Message,
+    Exception? Exception);
+
+internal sealed class TestLoggerProvider : ILoggerProvider
+{
+    private readonly System.Collections.Concurrent.ConcurrentQueue<TestLogEntry> _entries = [];
+
+    public IReadOnlyList<TestLogEntry> Entries => _entries.ToArray();
+
+    public ILogger CreateLogger(string categoryName) => new TestLogger(categoryName, _entries);
+
+    public void Dispose()
+    {
+    }
+}
+
+internal sealed class TestLogger(
+    string categoryName,
+    System.Collections.Concurrent.ConcurrentQueue<TestLogEntry> entries) : ILogger
+{
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        entries.Enqueue(new TestLogEntry(
+            categoryName,
+            logLevel,
+            eventId,
+            formatter(state, exception),
+            exception));
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        public static readonly NullScope Instance = new();
+
+        public void Dispose()
+        {
+        }
     }
 }
 

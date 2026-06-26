@@ -1,4 +1,5 @@
 using Core.DDD;
+using Contracts;
 
 namespace Order.Orders.Models;
 
@@ -7,8 +8,8 @@ public class CustomerOrder : Aggregate<Guid>
     public string OrderNumber { get; set; } = default!; // e.g., "XT-20260131-001"
     public Guid? SourceCartId { get; set; }
     
-    // Customer reference (optional - for logged in users)
-    public Guid? CustomerId { get; set; } // Links to Customer module
+    // Customer reference in the Customer module
+    public Guid CustomerId { get; set; }
     
     // Customer info (required for all orders)
     public string CustomerName { get; set; } = default!;
@@ -42,6 +43,7 @@ public class CustomerOrder : Aggregate<Guid>
     public DateTime? ShippedAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
     public DateTime? CancelledAt { get; set; }
+    public DateTime? ReturnedAt { get; set; }
     public string? CancellationReason { get; set; }
     
     // Payment
@@ -56,6 +58,97 @@ public class CustomerOrder : Aggregate<Guid>
     
     // Navigation
     public List<OrderItem> Items { get; set; } = [];
+
+    public void ChangeStatus(OrderStatus newStatus, DateTime occurredAt, string? reason = null)
+    {
+        ValidateStatusTransition(Status, newStatus);
+
+        CustomerOrderOutcome? outcome = null;
+        switch (newStatus)
+        {
+            case OrderStatus.Confirmed:
+                break;
+            case OrderStatus.Processing:
+                break;
+            case OrderStatus.Shipped:
+                ShippedAt = occurredAt;
+                break;
+            case OrderStatus.Delivered:
+                DeliveredAt = occurredAt;
+                if (PaymentMethod == PaymentMethod.CashOnDelivery)
+                {
+                    PaymentStatus = PaymentStatus.Paid;
+                    PaidAt = occurredAt;
+                }
+                outcome = CustomerOrderOutcome.Delivered;
+                break;
+            case OrderStatus.Cancelled:
+                CancelledAt = occurredAt;
+                CancellationReason = reason;
+                outcome = CustomerOrderOutcome.Cancelled;
+                break;
+            case OrderStatus.Returned:
+                ReturnedAt = occurredAt;
+                outcome = CustomerOrderOutcome.Returned;
+                break;
+            default:
+                throw new InvalidOperationException($"Cannot transition from {Status} to {newStatus}");
+        }
+
+        Status = newStatus;
+        UpdatedAt = occurredAt;
+
+        if (outcome is not null)
+            RaiseCustomerOrderOutcome(outcome.Value, occurredAt);
+    }
+
+    private static void ValidateStatusTransition(OrderStatus current, OrderStatus target)
+    {
+        var validTransitions = new Dictionary<OrderStatus, OrderStatus[]>
+        {
+            [OrderStatus.Pending] = [OrderStatus.Confirmed, OrderStatus.Cancelled],
+            [OrderStatus.Confirmed] = [OrderStatus.Processing, OrderStatus.Cancelled],
+            [OrderStatus.Processing] = [OrderStatus.Shipped, OrderStatus.Cancelled],
+            [OrderStatus.Shipped] = [OrderStatus.Delivered, OrderStatus.Returned],
+            [OrderStatus.Delivered] = [OrderStatus.Returned],
+            [OrderStatus.Cancelled] = [],
+            [OrderStatus.Returned] = []
+        };
+
+        if (!validTransitions.TryGetValue(current, out var allowed) || !allowed.Contains(target))
+            throw new InvalidOperationException($"Cannot transition from {current} to {target}");
+    }
+
+    private void RaiseCustomerOrderOutcome(CustomerOrderOutcome outcome, DateTime occurredAt)
+    {
+        if (CustomerId == Guid.Empty)
+            throw new InvalidOperationException("Persisted Orders must have a CustomerId before Customer Order Outcomes can be emitted.");
+
+        ValidateOutcomeMoneyFacts();
+
+        AddDomainEvent(new CustomerOrderOutcomeOccurred(
+            CustomerId,
+            Id,
+            OrderNumber,
+            outcome,
+            occurredAt,
+            Subtotal,
+            DiscountAmount,
+            ShippingFee,
+            Total));
+    }
+
+    private void ValidateOutcomeMoneyFacts()
+    {
+        if (Subtotal < 0 || DiscountAmount < 0 || ShippingFee < 0 || Total < 0)
+            throw new InvalidOperationException("Customer Order Outcome money values must not be negative.");
+
+        if (DiscountAmount > Subtotal)
+            throw new InvalidOperationException("Customer Order Outcome discount cannot exceed subtotal.");
+
+        if (Total != Subtotal - DiscountAmount + ShippingFee)
+            throw new InvalidOperationException("Customer Order Outcome total must equal subtotal minus discount plus shipping fee.");
+    }
 }
 
 public enum OrderStatus

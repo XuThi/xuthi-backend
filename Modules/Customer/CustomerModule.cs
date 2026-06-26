@@ -4,10 +4,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Customer;
 
+// TODO: Deal with this shit
 public static class CustomerModule
 {
     public static IHostApplicationBuilder AddCustomerModule(this IHostApplicationBuilder builder)
@@ -19,6 +21,8 @@ public static class CustomerModule
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         builder.EnrichNpgsqlDbContext<CustomerDbContext>();
+        builder.Services.TryAddSingleton(TimeProvider.System);
+        builder.Services.AddScoped<Customers.Features.RecordCustomerOrderOutcome.CustomerLoyaltyOutcomeRecorder>();
         return builder;
     }
 }

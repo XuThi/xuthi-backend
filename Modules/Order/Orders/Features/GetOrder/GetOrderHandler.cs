@@ -41,6 +41,7 @@ public record OrderDetailResult(
     DateTime? ShippedAt,
     DateTime? DeliveredAt,
     DateTime? CancelledAt,
+    DateTime? ReturnedAt,
     string? CancellationReason,
     
     // Items
@@ -123,6 +124,7 @@ internal class GetOrderHandler(
             order.ShippedAt,
             order.DeliveredAt,
             order.CancelledAt,
+            order.ReturnedAt,
             order.CancellationReason,
             order.Items.Select(i => new OrderItemDetail(
                 i.Id,

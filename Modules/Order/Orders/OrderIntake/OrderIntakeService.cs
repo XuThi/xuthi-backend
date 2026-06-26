@@ -31,7 +31,7 @@ public interface IOrderIntake
 
 public record StartOrderAttempt(
     Guid CartId,
-    Guid? CustomerId,
+    Guid CustomerId,
     string CustomerName,
     string CustomerEmail,
     string CustomerPhone,
@@ -195,7 +195,7 @@ internal class OrderIntake(
             Id = Guid.NewGuid(),
             OrderNumber = GenerateOrderNumber(),
             SourceCartId = request.CartId,
-            CustomerId = quote.CustomerId,
+            CustomerId = request.CustomerId,
             CustomerName = request.CustomerName,
             CustomerEmail = request.CustomerEmail,
             CustomerPhone = request.CustomerPhone,
@@ -259,7 +259,7 @@ internal class OrderIntake(
             {
                 await sender.Send(new HoldVoucherUsageCommand(
                     order.VoucherId.Value,
-                    quote.CustomerId,
+                    request.CustomerId,
                     order.Id,
                     discountAmount), cancellationToken);
             }
@@ -719,7 +719,7 @@ internal class OrderIntake(
 
     private static bool IsOrderOwner(CustomerOrder order, Guid? requestUserId, string? requestEmail)
     {
-        if (order.CustomerId.HasValue && requestUserId.HasValue && order.CustomerId.Value == requestUserId.Value)
+        if (requestUserId.HasValue && order.CustomerId == requestUserId.Value)
             return true;
 
         if (!string.IsNullOrWhiteSpace(requestEmail)

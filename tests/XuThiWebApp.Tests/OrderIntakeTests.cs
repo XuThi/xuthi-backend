@@ -10,6 +10,7 @@ using Order.Orders.Features.UpdateOrderStatus;
 using Order.Orders.Models;
 using Order.Orders.OrderIntake;
 using Microsoft.EntityFrameworkCore;
+using Contracts;
 using Promotion.Vouchers.Features.ManageVoucherUsage;
 using Promotion.Vouchers.Features.ValidateVoucher;
 using Promotion.Vouchers.Models;
@@ -18,6 +19,215 @@ namespace XuThiWebApp.Tests;
 
 public sealed class OrderIntakeTests
 {
+    [Fact]
+    public async Task Broader_order_status_delivery_publishes_customer_order_outcome_facts()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100_000m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "delivery-outcome-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 2));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.CashOnDelivery), app.DefaultExternalUserId));
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Confirmed));
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Processing));
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Shipped));
+
+        app.TimeProvider.Advance(TimeSpan.FromHours(3));
+        var deliveredAt = app.TimeProvider.GetUtcNow().UtcDateTime;
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Delivered));
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Delivered", order.Status);
+        Assert.Equal("Paid", order.PaymentStatus);
+        Assert.Equal(deliveredAt, order.DeliveredAt);
+        Assert.Equal(deliveredAt, order.PaidAt);
+
+        var outcome = Assert.Single(app.CustomerOrderOutcomeEvents);
+        Assert.Equal(app.DefaultCustomerId, outcome.CustomerId);
+        Assert.Equal(checkout.OrderId, outcome.OrderId);
+        Assert.Equal(checkout.OrderNumber, outcome.OrderNumber);
+        Assert.Equal(CustomerOrderOutcome.Delivered, outcome.Outcome);
+        Assert.Equal(deliveredAt, outcome.OccurredAt);
+        Assert.Equal(order.Subtotal, outcome.Subtotal);
+        Assert.Equal(order.DiscountAmount, outcome.DiscountAmount);
+        Assert.Equal(order.ShippingFee, outcome.ShippingFee);
+        Assert.Equal(order.Total, outcome.Total);
+    }
+
+    [Fact]
+    public async Task Broader_order_status_cancellation_preserves_stock_release_and_publishes_outcome()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "cancel-outcome-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Confirmed));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(20));
+        var cancelledAt = app.TimeProvider.GetUtcNow().UtcDateTime;
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(
+            checkout.OrderId,
+            OrderStatus.Cancelled,
+            Reason: "Customer requested cancellation"));
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Cancelled", order.Status);
+        Assert.Equal(cancelledAt, order.CancelledAt);
+        Assert.Equal("Customer requested cancellation", order.CancellationReason);
+
+        var release = Assert.Single(app.StockReleases);
+        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        var restore = Assert.Single(app.StockRestores);
+        Assert.Equal(checkout.OrderId, restore.OrderId);
+
+        var outcome = Assert.Single(app.CustomerOrderOutcomeEvents);
+        Assert.Equal(CustomerOrderOutcome.Cancelled, outcome.Outcome);
+        Assert.Equal(cancelledAt, outcome.OccurredAt);
+        Assert.Equal(checkout.OrderId, outcome.OrderId);
+    }
+
+    [Fact]
+    public async Task Broader_order_status_return_from_shipped_sets_returned_time_and_publishes_outcome()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "return-outcome-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Confirmed));
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Processing));
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Shipped));
+
+        app.TimeProvider.Advance(TimeSpan.FromDays(2));
+        var returnedAt = app.TimeProvider.GetUtcNow().UtcDateTime;
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Returned));
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Returned", order.Status);
+        Assert.Equal(returnedAt, order.ReturnedAt);
+
+        var outcome = Assert.Single(app.CustomerOrderOutcomeEvents);
+        Assert.Equal(CustomerOrderOutcome.Returned, outcome.Outcome);
+        Assert.Equal(returnedAt, outcome.OccurredAt);
+        Assert.Equal(checkout.OrderId, outcome.OrderId);
+    }
+
+    [Fact]
+    public void CustomerOrder_change_status_rejects_same_status_updates()
+    {
+        var order = NewCreatedOrder(status: OrderStatus.Pending);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            order.ChangeStatus(OrderStatus.Pending, new DateTime(2026, 6, 24, 10, 0, 0, DateTimeKind.Utc)));
+
+        Assert.Contains("Cannot transition from Pending to Pending", ex.Message);
+        Assert.Empty(order.DomainEvents);
+    }
+
+    [Fact]
+    public void CustomerOrder_change_status_rejects_invalid_outcome_money_facts()
+    {
+        var order = NewCreatedOrder(status: OrderStatus.Shipped);
+        order.DiscountAmount = 150m;
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            order.ChangeStatus(OrderStatus.Delivered, new DateTime(2026, 6, 24, 10, 0, 0, DateTimeKind.Utc)));
+
+        Assert.Contains("discount cannot exceed subtotal", ex.Message);
+        Assert.Empty(order.DomainEvents);
+    }
+
+    [Fact]
+    public async Task Broader_order_status_command_rejects_same_status_and_invalid_transitions()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "invalid-status-command-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
+
+        var sameStatus = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Pending)));
+        Assert.Contains("Cannot transition from Pending to Pending", sameStatus.Message);
+
+        var invalidJump = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Shipped)));
+        Assert.Contains("Cannot transition from Pending to Shipped", invalidJump.Message);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("Pending", order.Status);
+        Assert.Empty(app.CustomerOrderOutcomeEvents);
+    }
+
     [Fact]
     public async Task PayOS_paid_result_confirms_order_attempt_into_created_order()
     {
@@ -43,7 +253,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -53,7 +262,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
             new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
@@ -95,7 +304,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -105,7 +313,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         await app.OrderIntake.ResolvePayOsPaymentResultAsync(
             new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
@@ -140,7 +348,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -150,7 +357,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.SetNextWebhookResult(new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
 
@@ -192,7 +399,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -202,7 +408,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
             new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Failed));
@@ -243,7 +449,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -253,7 +458,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
             new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Cancelled));
@@ -290,7 +495,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -300,7 +504,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var terminal = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
             new PayOsPaymentResult(123456789, terminalStatus));
@@ -348,7 +552,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -358,7 +561,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var cancelled = await app.OrderIntake.CancelOrderAttemptAsync(new CancelOrderAttempt(
             checkout.OrderId,
@@ -417,7 +620,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -427,7 +629,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new UpdateOrderStatusCommand(
@@ -476,7 +678,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -486,7 +687,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new UpdateOrderStatusCommand(
@@ -543,7 +744,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -553,7 +753,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             app.Sender.Send(new CancelPendingPayOsOrderCommand(
@@ -589,7 +789,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -599,7 +798,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         await app.OrderIntake.ResolvePayOsPaymentResultAsync(
             new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
@@ -651,7 +850,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -661,7 +859,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
 
@@ -712,7 +910,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -722,7 +919,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(30)));
 
@@ -779,7 +976,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -789,7 +985,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
         app.SetNextWebhookResult(new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Pending));
@@ -828,7 +1024,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -838,7 +1033,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(30)));
 
@@ -895,7 +1090,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -905,7 +1099,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
 
@@ -953,7 +1147,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -963,7 +1156,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
 
@@ -996,7 +1189,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1006,7 +1198,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
 
@@ -1045,7 +1237,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1055,7 +1246,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
         app.SetNextWebhookResult(new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
@@ -1104,7 +1295,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1114,7 +1304,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         Assert.Equal("https://pay.example/checkout", checkout.PaymentUrl);
 
@@ -1176,7 +1366,6 @@ public sealed class OrderIntakeTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: null,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -1186,7 +1375,7 @@ public sealed class OrderIntakeTests
                 ShippingNote: null,
                 PaymentMethod: PaymentMethod.PayOS,
                 ReturnUrl: "https://shop.example/checkout/return",
-                CancelUrl: "https://shop.example/checkout/cancel"))));
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("PayOS unavailable", ex.Message);
 
@@ -1239,7 +1428,6 @@ public sealed class OrderIntakeTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: null,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -1249,7 +1437,7 @@ public sealed class OrderIntakeTests
                 ShippingNote: null,
                 PaymentMethod: PaymentMethod.PayOS,
                 ReturnUrl: "https://shop.example/checkout/return",
-                CancelUrl: "https://shop.example/checkout/cancel"))));
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("order save failed", ex.Message);
 
@@ -1308,7 +1496,6 @@ public sealed class OrderIntakeTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: null,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -1318,7 +1505,7 @@ public sealed class OrderIntakeTests
                 ShippingNote: null,
                 PaymentMethod: paymentMethod,
                 ReturnUrl: "https://shop.example/checkout/return",
-                CancelUrl: "https://shop.example/checkout/cancel"))));
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("order save failed", ex.Message);
 
@@ -1357,7 +1544,6 @@ public sealed class OrderIntakeTests
 
         var request = new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1369,11 +1555,11 @@ public sealed class OrderIntakeTests
             ReturnUrl: "https://shop.example/checkout/return",
             CancelUrl: "https://shop.example/checkout/cancel");
 
-        var first = await app.Sender.Send(new CheckoutCommand(request));
+        var first = await app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(4));
 
-        var retry = await app.Sender.Send(new CheckoutCommand(request));
+        var retry = await app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId));
 
         Assert.Equal(first.OrderId, retry.OrderId);
         Assert.Equal(first.OrderNumber, retry.OrderNumber);
@@ -1403,7 +1589,6 @@ public sealed class OrderIntakeTests
 
         var request = new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1415,12 +1600,12 @@ public sealed class OrderIntakeTests
             ReturnUrl: "https://shop.example/checkout/return",
             CancelUrl: "https://shop.example/checkout/cancel");
 
-        var first = await app.Sender.Send(new CheckoutCommand(request));
+        var first = await app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(1)));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            app.Sender.Send(new CheckoutCommand(request)));
+            app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId)));
 
         Assert.Contains("Payment Window", ex.Message);
 
@@ -1457,7 +1642,6 @@ public sealed class OrderIntakeTests
 
         var request = new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1469,12 +1653,12 @@ public sealed class OrderIntakeTests
             ReturnUrl: "https://shop.example/checkout/return",
             CancelUrl: "https://shop.example/checkout/cancel");
 
-        var first = await app.Sender.Send(new CheckoutCommand(request));
+        var first = await app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId));
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            app.Sender.Send(new CheckoutCommand(request)));
+            app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId)));
 
         Assert.Contains("fresh Cart Quote", ex.Message);
         Assert.Single(app.PaymentLinkAttempts);
@@ -1511,7 +1695,6 @@ public sealed class OrderIntakeTests
 
         var request = new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1521,8 +1704,8 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: paymentMethod);
 
-        var first = await app.Sender.Send(new CheckoutCommand(request));
-        var retry = await app.Sender.Send(new CheckoutCommand(request));
+        var first = await app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId));
+        var retry = await app.Sender.Send(new CheckoutCommand(request, app.DefaultExternalUserId));
 
         Assert.Equal(first.OrderId, retry.OrderId);
         Assert.Equal(first.OrderNumber, retry.OrderNumber);
@@ -1551,7 +1734,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1559,7 +1741,7 @@ public sealed class OrderIntakeTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
 
@@ -1600,7 +1782,6 @@ public sealed class OrderIntakeTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
                 CartId: addResult.CartId,
-                CustomerId: null,
                 CustomerName: "Jane Shopper",
                 CustomerEmail: "jane@example.com",
                 CustomerPhone: "0900000000",
@@ -1608,7 +1789,7 @@ public sealed class OrderIntakeTests
                 ShippingCity: "Ha Noi",
                 ShippingWard: "Ward 1",
                 ShippingNote: null,
-                PaymentMethod: PaymentMethod.BankTransfer))));
+                PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId)));
 
         Assert.Contains("stock confirmation failed", ex.Message);
 
@@ -1655,7 +1836,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1663,7 +1843,7 @@ public sealed class OrderIntakeTests
             ShippingCity: "Ha Noi",
             ShippingWard: "Ward 1",
             ShippingNote: null,
-            PaymentMethod: PaymentMethod.BankTransfer)));
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -1697,7 +1877,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1707,7 +1886,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         app.FailOrderSavesWhen(orderDb => orderDb.ChangeTracker
             .Entries<CustomerOrder>()
@@ -1802,7 +1981,6 @@ public sealed class OrderIntakeTests
 
         var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
             CartId: addResult.CartId,
-            CustomerId: null,
             CustomerName: "Jane Shopper",
             CustomerEmail: "jane@example.com",
             CustomerPhone: "0900000000",
@@ -1812,7 +1990,7 @@ public sealed class OrderIntakeTests
             ShippingNote: null,
             PaymentMethod: PaymentMethod.PayOS,
             ReturnUrl: "https://shop.example/checkout/return",
-            CancelUrl: "https://shop.example/checkout/cancel")));
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
 
         var heldAudit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var heldUsage = Assert.Single(heldAudit.Usages);
@@ -1838,5 +2016,29 @@ public sealed class OrderIntakeTests
         var releasedUsage = Assert.Single(releasedAudit.Usages);
         Assert.Equal(VoucherUsageStatus.Released, releasedUsage.Status);
         Assert.NotNull(releasedUsage.ReleasedAt);
+    }
+
+    private static CustomerOrder NewCreatedOrder(OrderStatus status)
+    {
+        return new CustomerOrder
+        {
+            Id = Guid.NewGuid(),
+            OrderNumber = "XT-20260624-TEST",
+            CustomerId = Guid.NewGuid(),
+            CustomerName = "Jane Shopper",
+            CustomerEmail = "jane@example.com",
+            CustomerPhone = "0900000000",
+            ShippingAddress = "1 Test Street",
+            ShippingCity = "Ha Noi",
+            ShippingWard = "Ward 1",
+            Subtotal = 100m,
+            DiscountAmount = 0m,
+            ShippingFee = 30m,
+            Total = 130m,
+            Status = status,
+            PaymentStatus = PaymentStatus.Paid,
+            PaymentMethod = PaymentMethod.BankTransfer,
+            CreatedOrderAt = new DateTime(2026, 6, 24, 9, 0, 0, DateTimeKind.Utc)
+        };
     }
 }

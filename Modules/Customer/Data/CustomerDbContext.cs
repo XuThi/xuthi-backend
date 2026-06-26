@@ -13,7 +13,7 @@ public class CustomerDbContext : DbContext
 
     public DbSet<CustomerProfile> Customers => Set<CustomerProfile>();
     public DbSet<CustomerAddress> Addresses => Set<CustomerAddress>();
-    public DbSet<PointsHistory> PointsHistory => Set<PointsHistory>();
+    public DbSet<LoyaltyHistory> LoyaltyHistory => Set<LoyaltyHistory>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -27,6 +27,19 @@ public class CustomerDbContext : DbContext
     {
         modelBuilder.Entity<CustomerProfile>(entity =>
         {
+            entity.ToTable("Customers", table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_Customers_LoyaltyPoints_NonNegative",
+                    "\"LoyaltyPoints\" >= 0");
+                table.HasCheckConstraint(
+                    "CK_Customers_TotalLoyaltySpend_NonNegative",
+                    "\"TotalLoyaltySpend\" >= 0");
+                table.HasCheckConstraint(
+                    "CK_Customers_TotalOrders_NonNegative",
+                    "\"TotalOrders\" >= 0");
+            });
+
             entity.HasKey(c => c.Id);
             entity.HasIndex(c => c.ExternalUserId).IsUnique();
             entity.HasIndex(c => c.Email);
@@ -34,7 +47,7 @@ public class CustomerDbContext : DbContext
             entity.Property(c => c.Email).HasMaxLength(256).IsRequired();
             entity.Property(c => c.FullName).HasMaxLength(200);
             entity.Property(c => c.Phone).HasMaxLength(20);
-            entity.Property(c => c.TotalSpent).HasPrecision(18, 2);
+            entity.Property(c => c.TotalLoyaltySpend).HasPrecision(18, 2);
             
             entity.HasMany(c => c.Addresses)
                 .WithOne(a => a.Customer)
@@ -70,12 +83,30 @@ public class CustomerDbContext : DbContext
             entity.Ignore(a => a.UpdatedBy);
         });
 
-        modelBuilder.Entity<PointsHistory>(entity =>
+        modelBuilder.Entity<LoyaltyHistory>(entity =>
         {
+            entity.ToTable("LoyaltyHistory", table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_LoyaltyHistory_PointsBalanceAfter_NonNegative",
+                    "\"PointsBalanceAfter\" >= 0");
+                table.HasCheckConstraint(
+                    "CK_LoyaltyHistory_TotalLoyaltySpendAfter_NonNegative",
+                    "\"TotalLoyaltySpendAfter\" >= 0");
+                table.HasCheckConstraint(
+                    "CK_LoyaltyHistory_TotalOrdersAfter_NonNegative",
+                    "\"TotalOrdersAfter\" >= 0");
+            });
+
             entity.HasKey(p => p.Id);
-            entity.HasIndex(p => p.CustomerId);
-            entity.HasIndex(p => p.CreatedAt);
+            entity.HasIndex(p => new { p.CustomerId, p.OccurredAt });
+            entity.HasIndex(p => new { p.RelatedOrderId, p.Type })
+                .IsUnique()
+                .HasFilter("\"RelatedOrderId\" IS NOT NULL AND \"Type\" IN (1, 6)");
             entity.Property(p => p.Description).HasMaxLength(500).IsRequired();
+            entity.Property(p => p.OrderNumber).HasMaxLength(50);
+            entity.Property(p => p.LoyaltySpendDelta).HasPrecision(18, 2);
+            entity.Property(p => p.TotalLoyaltySpendAfter).HasPrecision(18, 2);
             entity.Property(p => p.CreatedAt).HasColumnName("CreatedAt");
 
             // Ignore unused base class audit properties
