@@ -1,5 +1,6 @@
 using Cart.ShoppingCarts.Features.QuoteAndConsumeCart;
 using Cart.ShoppingCarts.Services;
+using Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Order.Orders.Events;
@@ -229,16 +230,31 @@ internal class OrderIntake(
         var stockHoldTtl = request.PaymentMethod == PaymentMethod.PayOS
             ? paymentSettlementGraceEndsAt!.Value - now
             : (TimeSpan?)null;
+        var stockLines = quote.Items
+            .Select(i => new StockLifecycleLine(i.VariantId, i.Quantity))
+            .ToList();
 
         var stockReserved = false;
 
         try
         {
-            await stockReservation.ReserveStockAsync(
-                sessionKey,
-                quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
-                stockHoldTtl,
-                cancellationToken);
+            if (request.PaymentMethod == PaymentMethod.PayOS)
+            {
+                var holdResult = await sender.Send(new HoldOrderAttemptStockCommand(
+                    order.Id,
+                    stockLines,
+                    paymentSettlementGraceEndsAt!.Value.UtcDateTime), cancellationToken);
+                EnsureStockLifecycleSuccess(holdResult);
+            }
+            else
+            {
+                await stockReservation.ReserveStockAsync(
+                    sessionKey,
+                    quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
+                    stockHoldTtl,
+                    cancellationToken);
+            }
+
             stockReserved = true;
 
             orderDb.Orders.Add(order);
@@ -663,6 +679,28 @@ internal class OrderIntake(
         await sender.Send(new ReleaseVoucherUsageCommand(
             order.VoucherId.Value,
             order.Id), cancellationToken);
+    }
+
+    private static void EnsureStockLifecycleSuccess(StockLifecycleResult result)
+    {
+        if (result.IsSuccess)
+            return;
+
+        var message = result.Status switch
+        {
+            StockLifecycleResultStatus.ValidationFailed => string.Join(
+                " ",
+                result.ValidationDetails.Select(detail => detail.Message)),
+            StockLifecycleResultStatus.InsufficientStock => string.Join(
+                " ",
+                result.InsufficientStockDetails.Select(detail =>
+                    $"Insufficient stock for Product Variant {detail.ProductVariantId}. Requested {detail.RequestedQuantity}, available {detail.AvailableQuantity}.")),
+            StockLifecycleResultStatus.Conflict => result.Conflict?.Reason
+                ?? "Stock lifecycle conflict for this Order Attempt.",
+            _ => "Stock lifecycle could not hold this Order Attempt."
+        };
+
+        throw new InvalidOperationException(message);
     }
 
     private async Task RemoveOrderAttemptRecordAsync(

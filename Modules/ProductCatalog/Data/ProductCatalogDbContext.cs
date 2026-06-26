@@ -27,6 +27,7 @@ public class ProductCatalogDbContext(
     public DbSet<ProductVariantOption> ProductVariantOptions => Set<ProductVariantOption>();
     public DbSet<VariantOptionSelection> VariantOptionSelections => Set<VariantOptionSelection>();
     public DbSet<OrderStockAllocation> OrderStockAllocations => Set<OrderStockAllocation>();
+    public DbSet<OrderStockLifecycleEventFact> OrderStockLifecycleEventFacts => Set<OrderStockLifecycleEventFact>();
     public DbSet<OrderItemProductReference> OrderItemProductReferences => Set<OrderItemProductReference>();
     public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
 
@@ -196,6 +197,22 @@ public class ProductCatalogDbContext(
             e.Ignore(r => r.UpdatedBy);
             e.Property(r => r.CreatedAt).HasColumnName("CreatedAt");
             e.Property(r => r.UpdatedAt).HasColumnName("UpdatedAt");
+        });
+
+        // OrderStockLifecycleEventFact
+        modelBuilder.Entity<OrderStockLifecycleEventFact>(e =>
+        {
+            e.ToTable("OrderStockLifecycleEventFacts");
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.IdempotencyKey).IsUnique();
+            e.HasIndex(f => new { f.OrderId, f.EventType });
+            e.Property(f => f.EventType).IsRequired();
+            e.Property(f => f.IdempotencyKey).IsRequired();
+            e.Property(f => f.LinesJson).IsRequired();
+            e.Ignore(f => f.CreatedBy);
+            e.Ignore(f => f.UpdatedBy);
+            e.Property(f => f.CreatedAt).HasColumnName("CreatedAt");
+            e.Property(f => f.UpdatedAt).HasColumnName("UpdatedAt");
         });
 
         // ProductReview

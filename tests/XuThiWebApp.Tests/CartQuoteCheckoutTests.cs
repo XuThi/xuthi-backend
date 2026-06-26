@@ -1111,6 +1111,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         services.AddScoped(cartQuoteServiceType);
 
         services.AddScoped<IStockReservationService, TestStockReservationService>();
+        services.AddScoped<TestStockLifecycleHandler>();
+        services.AddScoped<IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
+            sp.GetRequiredService<TestStockLifecycleHandler>());
         services.AddScoped<IPaymentService, TestPaymentService>();
         services.AddOrderIntake();
 
@@ -1144,7 +1147,28 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Restores;
 
     public IReadOnlyList<StockReservationAttempt> StockReservations
-        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Reservations;
+    {
+        get
+        {
+            var legacy = ((TestStockReservationService)_scope.ServiceProvider
+                    .GetRequiredService<IStockReservationService>())
+                .Reservations;
+            var lifecycle = _scope.ServiceProvider
+                .GetRequiredService<TestStockLifecycleHandler>()
+                .Holds
+                .Select(hold => new StockReservationAttempt(
+                    $"order:{hold.OrderId}",
+                    hold.Lines
+                        .Select(line => new StockReservationItem(line.ProductVariantId, line.Quantity))
+                        .ToList(),
+                    hold.Ttl));
+
+            return legacy.Concat(lifecycle).ToList();
+        }
+    }
+
+    public IReadOnlyList<StockLifecycleHoldAttempt> StockLifecycleHolds
+        => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Holds;
 
     public IReadOnlyList<OrderCreatedEvent> CreatedOrderEvents
         => _scope.ServiceProvider.GetRequiredService<TestOrderCreatedEventRecorder>().Events;
@@ -1305,6 +1329,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     {
         var stockReservation = (TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>();
         stockReservation.OnConfirmAsync = onConfirm;
+    }
+
+    public void SetNextStockLifecycleHoldResult(StockLifecycleResult result)
+    {
+        var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
+        stockLifecycle.NextResult = result;
     }
 
     public void SetNextWebhookResult(PayOsPaymentResult result)
@@ -1503,6 +1533,12 @@ internal sealed record StockReservationAttempt(
 
 internal sealed record StockReservationItem(Guid VariantId, int Quantity);
 
+internal sealed record StockLifecycleHoldAttempt(
+    Guid OrderId,
+    IReadOnlyList<StockLifecycleLine> Lines,
+    DateTime HoldExpiresAt,
+    TimeSpan? Ttl);
+
 internal sealed record PaymentLinkAttempt(
     Guid OrderId,
     string OrderNumber,
@@ -1524,6 +1560,42 @@ internal sealed record PaymentLinkAttemptItem(
     decimal TotalPrice);
 
 internal sealed record PaymentLinkCancellation(long OrderCode, string Reason);
+
+internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
+    : IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>
+{
+    private readonly List<StockLifecycleHoldAttempt> _holds = [];
+
+    public StockLifecycleResult? NextResult { get; set; }
+
+    public IReadOnlyList<StockLifecycleHoldAttempt> Holds => _holds;
+
+    public Task<StockLifecycleResult> Handle(
+        HoldOrderAttemptStockCommand request,
+        CancellationToken cancellationToken)
+    {
+        var normalizedLines = request.Lines
+            .GroupBy(line => line.ProductVariantId)
+            .Select(group => new StockLifecycleLine(
+                group.Key,
+                group.Sum(line => line.Quantity)))
+            .OrderBy(line => line.ProductVariantId)
+            .ToList();
+        var result = NextResult ?? StockLifecycleResult.Succeeded(normalizedLines);
+        NextResult = null;
+
+        if (result.IsSuccess)
+        {
+            _holds.Add(new StockLifecycleHoldAttempt(
+                request.OrderId,
+                normalizedLines,
+                request.HoldExpiresAt,
+                request.HoldExpiresAt - timeProvider.GetUtcNow().UtcDateTime));
+        }
+
+        return Task.FromResult(result);
+    }
+}
 
 internal static class TestServiceCollectionExtensions
 {

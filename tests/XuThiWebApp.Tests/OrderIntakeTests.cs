@@ -1333,6 +1333,13 @@ public sealed class OrderIntakeTests
         Assert.Equal(TimeSpan.FromMinutes(6), stockHold.Ttl);
         Assert.Empty(app.StockConfirmations);
 
+        var lifecycleHold = Assert.Single(app.StockLifecycleHolds);
+        Assert.Equal(checkout.OrderId, lifecycleHold.OrderId);
+        Assert.Equal(expectedGraceEnd, lifecycleHold.HoldExpiresAt);
+        var lifecycleLine = Assert.Single(lifecycleHold.Lines);
+        Assert.Equal(item.VariantId, lifecycleLine.ProductVariantId);
+        Assert.Equal(1, lifecycleLine.Quantity);
+
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
         Assert.Equal(VoucherUsageStatus.Held, usage.Status);
@@ -1395,6 +1402,133 @@ public sealed class OrderIntakeTests
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
         Assert.Equal(VoucherUsageStatus.Released, usage.Status);
+    }
+
+    [Fact]
+    public async Task PayOS_start_translates_stock_lifecycle_insufficient_stock_without_creating_order_attempt()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-stock-lifecycle-insufficient-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 2));
+
+        app.SetNextStockLifecycleHoldResult(StockLifecycleResult.InsufficientStock(
+            [new StockLifecycleLine(item.VariantId, 2)],
+            [new StockLifecycleInsufficientStockDetail(item.VariantId, 2, 1)]));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.PayOS,
+                ReturnUrl: "https://shop.example/checkout/return",
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
+
+        Assert.Contains("Insufficient stock", ex.Message);
+        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.PaymentLinkAttempts);
+
+        var orders = await app.Sender.Send(new GetOrdersQuery(PageSize: 100));
+        Assert.Empty(orders.Orders);
+
+        var cart = await app.GetCartStateAsync(addResult.CartId);
+        Assert.Equal(CartStatus.Active, cart.Status);
+        Assert.Equal(1, cart.ItemCount);
+    }
+
+    [Fact]
+    public async Task PayOS_start_translates_stock_lifecycle_validation_failure_without_creating_order_attempt()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-stock-lifecycle-validation-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        app.SetNextStockLifecycleHoldResult(StockLifecycleResult.ValidationFailed(
+            [new StockLifecycleValidationDetail(
+                item.VariantId,
+                "ProductVariantUnavailable",
+                "Product Variant is no longer available.")]));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.PayOS,
+                ReturnUrl: "https://shop.example/checkout/return",
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
+
+        Assert.Contains("no longer available", ex.Message);
+        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.PaymentLinkAttempts);
+        Assert.Empty((await app.Sender.Send(new GetOrdersQuery(PageSize: 100))).Orders);
+    }
+
+    [Fact]
+    public async Task PayOS_start_translates_stock_lifecycle_conflict_without_creating_order_attempt()
+    {
+        await using var app = new CommerceTestApp();
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "payos-stock-lifecycle-conflict-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 1));
+
+        app.SetNextStockLifecycleHoldResult(StockLifecycleResult.Conflicted(
+            [new StockLifecycleLine(item.VariantId, 1)],
+            new StockLifecycleConflictDetail(
+                "Existing stock lifecycle allocation for this Order id is not compatible.",
+                "Held",
+                "Held",
+                [new StockLifecycleLine(item.VariantId, 1)],
+                [new StockLifecycleLine(item.VariantId, 2)],
+                DateTime.UtcNow.AddMinutes(6),
+                DateTime.UtcNow.AddMinutes(5))));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+                CartId: addResult.CartId,
+                CustomerName: "Jane Shopper",
+                CustomerEmail: "jane@example.com",
+                CustomerPhone: "0900000000",
+                ShippingAddress: "1 Test Street",
+                ShippingCity: "Ha Noi",
+                ShippingWard: "Ward 1",
+                ShippingNote: null,
+                PaymentMethod: PaymentMethod.PayOS,
+                ReturnUrl: "https://shop.example/checkout/return",
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
+
+        Assert.Contains("not compatible", ex.Message);
+        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.PaymentLinkAttempts);
+        Assert.Empty((await app.Sender.Send(new GetOrdersQuery(PageSize: 100))).Orders);
     }
 
     [Fact]
