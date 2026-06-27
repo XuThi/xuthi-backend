@@ -82,6 +82,36 @@ public sealed class StockLifecycleRestoreTests
     }
 
     [Fact]
+    public async Task Restoring_created_order_stock_when_variant_stock_cannot_be_updated_keeps_commitment()
+    {
+        await using var app = new ProductCatalogStockLifecycleTestApp();
+        var orderId = Guid.NewGuid();
+        var missingVariantId = Guid.NewGuid();
+
+        app.Db.OrderStockAllocations.Add(new OrderStockAllocation
+        {
+            Id = Guid.NewGuid(),
+            OrderId = orderId,
+            ProductVariantId = missingVariantId,
+            Quantity = 2,
+            State = OrderStockAllocationState.Committed,
+            HeldAt = DateTime.UtcNow.AddMinutes(-5),
+            CommittedAt = DateTime.UtcNow.AddMinutes(-4)
+        });
+        await app.Db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() =>
+            app.Sender.Send(new RestoreCreatedOrderStockCommand(orderId)));
+
+        var allocation = await app.Db.OrderStockAllocations
+            .AsNoTracking()
+            .SingleAsync();
+
+        Assert.Equal(OrderStockAllocationState.Committed, allocation.State);
+        Assert.Empty(app.RestoredFacts);
+    }
+
+    [Fact]
     public async Task Restoring_held_order_attempt_stock_returns_conflict_without_changing_stock()
     {
         await using var app = new ProductCatalogStockLifecycleTestApp();

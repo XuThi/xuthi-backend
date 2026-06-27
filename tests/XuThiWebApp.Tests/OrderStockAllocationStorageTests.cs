@@ -146,7 +146,7 @@ public sealed class OrderStockAllocationStorageTests
     }
 
     [Fact]
-    public async Task Cleanup_releases_held_allocations_only_after_hold_expiry_plus_orphan_buffer()
+    public async Task Cleanup_does_not_release_order_backed_stock_holds_after_hold_expiry_plus_orphan_buffer()
     {
         await using var app = new ProductCatalogStockTestApp(
             orphanHoldReleaseBuffer: TimeSpan.FromMinutes(5));
@@ -171,8 +171,59 @@ public sealed class OrderStockAllocationStorageTests
 
         var afterBuffer = await app.Stock.CleanupExpiredReservationsAsync();
 
+        Assert.Equal(0, afterBuffer);
+        Assert.Equal(OrderStockAllocationState.Held, await app.GetAllocationStateAsync(orderId));
+        Assert.Equal(3, await app.GetStockQuantityAsync(item.VariantId));
+    }
+
+    [Fact]
+    public async Task Cleanup_releases_orphan_stock_holds_only_after_hold_expiry_plus_orphan_buffer()
+    {
+        await using var app = new ProductCatalogStockTestApp(
+            orphanHoldReleaseBuffer: TimeSpan.FromMinutes(5));
+        var item = await app.SeedCatalogItemAsync(stockQuantity: 5);
+        const string sessionKey = "legacy-session";
+
+        await app.Stock.ReserveStockAsync(
+            sessionKey,
+            [(item.VariantId, 2)],
+            TimeSpan.FromMinutes(-4));
+
+        var beforeBuffer = await app.Stock.CleanupExpiredReservationsAsync();
+
+        Assert.Equal(0, beforeBuffer);
+        Assert.Equal(OrderStockAllocationState.Held, await app.GetSingleAllocationStateAsync());
+        Assert.Equal(3, await app.GetStockQuantityAsync(item.VariantId));
+
+        var allocation = await app.Db.OrderStockAllocations.SingleAsync();
+        allocation.HoldExpiresAt = DateTime.UtcNow.AddMinutes(-6);
+        await app.Db.SaveChangesAsync();
+
+        var afterBuffer = await app.Stock.CleanupExpiredReservationsAsync();
+
         Assert.Equal(1, afterBuffer);
-        Assert.Equal(OrderStockAllocationState.Released, await app.GetAllocationStateAsync(orderId));
+        Assert.Equal(OrderStockAllocationState.Released, await app.GetSingleAllocationStateAsync());
+        Assert.Equal(5, await app.GetStockQuantityAsync(item.VariantId));
+    }
+
+    [Fact]
+    public async Task Cleanup_repeated_after_orphan_release_does_not_increment_stock_twice()
+    {
+        await using var app = new ProductCatalogStockTestApp(
+            orphanHoldReleaseBuffer: TimeSpan.FromMinutes(5));
+        var item = await app.SeedCatalogItemAsync(stockQuantity: 5);
+
+        await app.Stock.ReserveStockAsync(
+            "legacy-repeat-cleanup-session",
+            [(item.VariantId, 2)],
+            TimeSpan.FromMinutes(-6));
+
+        var firstCleanup = await app.Stock.CleanupExpiredReservationsAsync();
+        var secondCleanup = await app.Stock.CleanupExpiredReservationsAsync();
+
+        Assert.Equal(1, firstCleanup);
+        Assert.Equal(0, secondCleanup);
+        Assert.Equal(OrderStockAllocationState.Released, await app.GetSingleAllocationStateAsync());
         Assert.Equal(5, await app.GetStockQuantityAsync(item.VariantId));
     }
 }
@@ -268,6 +319,13 @@ internal sealed class ProductCatalogStockTestApp : IAsyncDisposable
     {
         return await _db.OrderStockAllocations
             .Where(allocation => allocation.OrderId == orderId)
+            .Select(allocation => allocation.State)
+            .SingleAsync();
+    }
+
+    public async Task<OrderStockAllocationState> GetSingleAllocationStateAsync()
+    {
+        return await _db.OrderStockAllocations
             .Select(allocation => allocation.State)
             .SingleAsync();
     }

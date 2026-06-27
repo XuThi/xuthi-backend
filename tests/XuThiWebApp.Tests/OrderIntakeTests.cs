@@ -14,6 +14,7 @@ using Contracts;
 using Promotion.Vouchers.Features.ManageVoucherUsage;
 using Promotion.Vouchers.Features.ValidateVoucher;
 using Promotion.Vouchers.Models;
+using ProductCatalog.Products.Models;
 
 namespace XuThiWebApp.Tests;
 
@@ -289,6 +290,90 @@ public sealed class OrderIntakeTests
 
         var createdEvent = Assert.Single(app.CreatedOrderEvents);
         Assert.Equal(checkout.OrderId, createdEvent.OrderId);
+    }
+
+    [Fact]
+    public async Task PayOS_order_intake_with_real_stock_lifecycle_holds_then_commits_stock()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now, useRealStockLifecycle: true);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "real-stock-payos-paid-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 2));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
+
+        var held = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Held, held.State);
+        Assert.Equal(3, await app.GetCatalogStockQuantityAsync(item.VariantId));
+
+        var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Paid));
+
+        Assert.Equal(PayOsPaymentResolution.Confirmed, resolved.Resolution);
+
+        var committed = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Committed, committed.State);
+        Assert.Equal(3, await app.GetCatalogStockQuantityAsync(item.VariantId));
+    }
+
+    [Fact]
+    public async Task PayOS_order_intake_with_real_stock_lifecycle_expires_and_releases_stock()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now, useRealStockLifecycle: true);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "real-stock-payos-expiry-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 2));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.PayOS,
+            ReturnUrl: "https://shop.example/checkout/return",
+            CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId));
+
+        var held = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Held, held.State);
+        Assert.Equal(3, await app.GetCatalogStockQuantityAsync(item.VariantId));
+
+        app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
+
+        var resolved = await app.OrderIntake.ResolvePayOsPaymentResultAsync(
+            new PayOsPaymentResult(123456789, PayOsPaymentResultStatus.Processing));
+
+        Assert.Equal(PayOsPaymentResolution.Expired, resolved.Resolution);
+
+        var released = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Released, released.State);
+        Assert.Equal(5, await app.GetCatalogStockQuantityAsync(item.VariantId));
     }
 
     [Fact]
@@ -1904,6 +1989,84 @@ public sealed class OrderIntakeTests
         var committedLine = Assert.Single(lifecycleCommit.Lines);
         Assert.Equal(item.VariantId, committedLine.ProductVariantId);
         Assert.Equal(1, committedLine.Quantity);
+    }
+
+    [Fact]
+    public async Task Manual_order_intake_with_real_stock_lifecycle_commits_stock_immediately()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now, useRealStockLifecycle: true);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "real-stock-bank-transfer-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 2));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
+
+        Assert.Null(checkout.PaymentUrl);
+
+        var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
+        Assert.Equal("BankTransfer", order.PaymentMethod);
+        Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
+
+        var committed = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Committed, committed.State);
+        Assert.Equal(item.VariantId, committed.ProductVariantId);
+        Assert.Equal(2, committed.Quantity);
+        Assert.Equal(3, await app.GetCatalogStockQuantityAsync(item.VariantId));
+    }
+
+    [Fact]
+    public async Task Created_order_cancellation_with_real_stock_lifecycle_restores_committed_stock()
+    {
+        var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
+        await using var app = new CommerceTestApp(now, useRealStockLifecycle: true);
+        var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
+
+        var addResult = await app.Sender.Send(new AddToCartCommand(
+            SessionId: "real-stock-created-order-cancel-session",
+            CustomerId: null,
+            ProductId: item.ProductId,
+            VariantId: item.VariantId,
+            Quantity: 2));
+
+        var checkout = await app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
+            CartId: addResult.CartId,
+            CustomerName: "Jane Shopper",
+            CustomerEmail: "jane@example.com",
+            CustomerPhone: "0900000000",
+            ShippingAddress: "1 Test Street",
+            ShippingCity: "Ha Noi",
+            ShippingWard: "Ward 1",
+            ShippingNote: null,
+            PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId));
+
+        var committed = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Committed, committed.State);
+        Assert.Equal(3, await app.GetCatalogStockQuantityAsync(item.VariantId));
+
+        await app.Sender.Send(new UpdateOrderStatusCommand(checkout.OrderId, OrderStatus.Confirmed));
+        await app.Sender.Send(new UpdateOrderStatusCommand(
+            checkout.OrderId,
+            OrderStatus.Cancelled,
+            Reason: "Customer requested cancellation"));
+
+        var restored = await app.GetSingleStockAllocationAsync(checkout.OrderId);
+        Assert.Equal(OrderStockAllocationState.Restored, restored.State);
+        Assert.Equal(5, await app.GetCatalogStockQuantityAsync(item.VariantId));
     }
 
     [Fact]

@@ -45,13 +45,17 @@ internal class ReleaseOrderAttemptStockHandler(ProductCatalogDbContext db)
                         await LoadAllocationsAsync(command.OrderId, cancellationToken)).Result;
                 }
 
-                await db.Variants
+                var variantRowsAffected = await db.Variants
                     .Where(variant => variant.Id == allocation.ProductVariantId)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(
                             variant => variant.StockQuantity,
                             variant => variant.StockQuantity + allocation.Quantity),
                         cancellationToken);
+
+                if (variantRowsAffected == 0)
+                    throw new DbUpdateConcurrencyException(
+                        "Stock lifecycle release could not restore stock for an allocation.");
             }
 
             db.OrderStockLifecycleEventFacts.Add(new OrderStockLifecycleEventFact
@@ -75,9 +79,14 @@ internal class ReleaseOrderAttemptStockHandler(ProductCatalogDbContext db)
                 await transaction.RollbackAsync(cancellationToken);
 
             db.ChangeTracker.Clear();
-            return EvaluateExistingRelease(
+            var afterRace = EvaluateExistingRelease(
                 command.OrderId,
-                await LoadAllocationsAsync(command.OrderId, cancellationToken)).Result;
+                await LoadAllocationsAsync(command.OrderId, cancellationToken));
+
+            if (!afterRace.ShouldRelease)
+                return afterRace.Result;
+
+            throw;
         }
 
         return releaseDecision.Result;

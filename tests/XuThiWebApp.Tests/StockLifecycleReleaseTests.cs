@@ -81,6 +81,36 @@ public sealed class StockLifecycleReleaseTests
         Assert.Empty(app.ReleasedFacts);
     }
 
+    [Fact]
+    public async Task Releasing_order_attempt_stock_when_variant_stock_cannot_be_updated_keeps_hold()
+    {
+        await using var app = new ProductCatalogStockLifecycleTestApp();
+        var orderId = Guid.NewGuid();
+        var missingVariantId = Guid.NewGuid();
+
+        app.Db.OrderStockAllocations.Add(new OrderStockAllocation
+        {
+            Id = Guid.NewGuid(),
+            OrderId = orderId,
+            ProductVariantId = missingVariantId,
+            Quantity = 2,
+            State = OrderStockAllocationState.Held,
+            HeldAt = DateTime.UtcNow,
+            HoldExpiresAt = DateTime.UtcNow.AddMinutes(6)
+        });
+        await app.Db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() =>
+            app.Sender.Send(new ReleaseOrderAttemptStockCommand(orderId)));
+
+        var allocation = await app.Db.OrderStockAllocations
+            .AsNoTracking()
+            .SingleAsync();
+
+        Assert.Equal(OrderStockAllocationState.Held, allocation.State);
+        Assert.Empty(app.ReleasedFacts);
+    }
+
     [Theory]
     [InlineData(OrderStockAllocationState.Committed)]
     [InlineData(OrderStockAllocationState.Restored)]

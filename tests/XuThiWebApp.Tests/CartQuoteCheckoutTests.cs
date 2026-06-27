@@ -20,6 +20,7 @@ using Customer.Data;
 using FluentValidation;
 using MediatR;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -1055,13 +1056,15 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 {
     private readonly ServiceProvider _provider;
     private readonly AsyncServiceScope _scope;
+    private readonly SqliteConnection? _productCatalogConnection;
     private int _productCounter;
     public string DefaultExternalUserId => "checkout-test-user";
     public Guid DefaultCustomerId { get; }
 
     public CommerceTestApp(
         DateTimeOffset? utcNow = null,
-        OrderIntakePaymentWindowPolicy? paymentWindowPolicy = null)
+        OrderIntakePaymentWindowPolicy? paymentWindowPolicy = null,
+        bool useRealStockLifecycle = false)
     {
         var services = new ServiceCollection();
         var databaseName = $"commerce-tests-{Guid.NewGuid():N}";
@@ -1095,7 +1098,18 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             databaseName,
             (sp, options) => options.AddInterceptors(
                 sp.GetRequiredService<TestOrderSaveFailureInterceptor>()));
-        services.AddTestDbContext<ProductCatalogDbContext>(databaseName);
+        if (useRealStockLifecycle)
+        {
+            _productCatalogConnection = new SqliteConnection(
+                $"Data Source=file:commerce-product-catalog-{Guid.NewGuid():N}?mode=memory&cache=shared");
+            _productCatalogConnection.Open();
+            services.AddDbContext<ProductCatalogDbContext>(options =>
+                options.UseSqlite(_productCatalogConnection));
+        }
+        else
+        {
+            services.AddTestDbContext<ProductCatalogDbContext>(databaseName);
+        }
         services.AddTestDbContext<PromotionDbContext>(databaseName);
         services.AddScoped<Customer.Customers.Features.RecordCustomerOrderOutcome.CustomerLoyaltyOutcomeRecorder>();
 
@@ -1111,20 +1125,26 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             ?? throw new InvalidOperationException("CartQuoteService was not found.");
         services.AddScoped(cartQuoteServiceType);
 
-        services.AddScoped<TestStockLifecycleHandler>();
-        services.AddScoped<IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
-            sp.GetRequiredService<TestStockLifecycleHandler>());
-        services.AddScoped<IRequestHandler<CommitOrderStockCommand, StockLifecycleResult>>(sp =>
-            sp.GetRequiredService<TestStockLifecycleHandler>());
-        services.AddScoped<IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
-            sp.GetRequiredService<TestStockLifecycleHandler>());
-        services.AddScoped<IRequestHandler<RestoreCreatedOrderStockCommand, StockLifecycleResult>>(sp =>
-            sp.GetRequiredService<TestStockLifecycleHandler>());
+        if (!useRealStockLifecycle)
+        {
+            services.AddScoped<TestStockLifecycleHandler>();
+            services.AddScoped<IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
+                sp.GetRequiredService<TestStockLifecycleHandler>());
+            services.AddScoped<IRequestHandler<CommitOrderStockCommand, StockLifecycleResult>>(sp =>
+                sp.GetRequiredService<TestStockLifecycleHandler>());
+            services.AddScoped<IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
+                sp.GetRequiredService<TestStockLifecycleHandler>());
+            services.AddScoped<IRequestHandler<RestoreCreatedOrderStockCommand, StockLifecycleResult>>(sp =>
+                sp.GetRequiredService<TestStockLifecycleHandler>());
+        }
         services.AddScoped<IPaymentService, TestPaymentService>();
         services.AddOrderIntake();
 
         _provider = services.BuildServiceProvider(validateScopes: true);
         _scope = _provider.CreateAsyncScope();
+        if (useRealStockLifecycle)
+            _scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>().Database.EnsureCreated();
+
         DefaultCustomerId = SeedCustomerProfile(DefaultExternalUserId);
     }
 
@@ -1246,6 +1266,26 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             variant.StockQuantity = stockQuantity.Value;
 
         await catalog.SaveChangesAsync();
+    }
+
+    public async Task<int> GetCatalogStockQuantityAsync(Guid variantId, CancellationToken ct = default)
+    {
+        var catalog = _scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>();
+        return await catalog.Variants
+            .AsNoTracking()
+            .Where(v => v.Id == variantId)
+            .Select(v => v.StockQuantity)
+            .SingleAsync(ct);
+    }
+
+    public async Task<OrderStockAllocation> GetSingleStockAllocationAsync(
+        Guid orderId,
+        CancellationToken ct = default)
+    {
+        var catalog = _scope.ServiceProvider.GetRequiredService<ProductCatalogDbContext>();
+        return await catalog.OrderStockAllocations
+            .AsNoTracking()
+            .SingleAsync(allocation => allocation.OrderId == orderId, ct);
     }
 
     public async Task SeedSaleAsync(CatalogItem item, decimal salePrice, decimal? originalPrice = null)
@@ -1490,6 +1530,8 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     {
         await _scope.DisposeAsync();
         await _provider.DisposeAsync();
+        if (_productCatalogConnection is not null)
+            await _productCatalogConnection.DisposeAsync();
     }
 }
 

@@ -39,15 +39,18 @@ internal class StockReservationCleanupService(
                     logger.LogInformation("Released {Count} expired stock allocations", released);
                 }
 
-                // Check if there are any remaining active allocations logic directly via dbContext
+                // Only orphan holds are eligible for ProductCatalog cleanup.
                 var db = scope.ServiceProvider.GetRequiredService<ProductCatalog.Data.ProductCatalogDbContext>();
-                var hasActive = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(
-                    db.OrderStockAllocations, r => r.State == ProductCatalog.Products.Models.OrderStockAllocationState.Held, stoppingToken);
+                var hasOrphanHolds = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(
+                    db.OrderStockAllocations,
+                    r => !r.OrderId.HasValue
+                        && r.State == ProductCatalog.Products.Models.OrderStockAllocationState.Held,
+                    stoppingToken);
                 
-                if (!hasActive)
+                if (!hasOrphanHolds)
                 {
                     RequireCheck = false;
-                    logger.LogInformation("No active stock allocations remaining. Stock allocation cleanup paused until a new hold.");
+                    logger.LogInformation("No orphan stock holds remaining. Stock allocation cleanup paused until a new orphan hold.");
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

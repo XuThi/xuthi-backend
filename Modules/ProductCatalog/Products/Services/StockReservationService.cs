@@ -230,7 +230,9 @@ internal class StockReservationService(
             ?? new StockLifecycleOptions().OrphanHoldReleaseBuffer);
 
         var expiredAllocations = await db.OrderStockAllocations
+            .AsNoTracking()
             .Where(r => r.State == OrderStockAllocationState.Held
+                && !r.OrderId.HasValue
                 && r.HoldExpiresAt.HasValue
                 && r.HoldExpiresAt <= orphanReleaseCutoff)
             .ToListAsync(ct);
@@ -241,21 +243,41 @@ internal class StockReservationService(
         var ownsTransaction = db.Database.CurrentTransaction is null;
         await using var transaction = ownsTransaction ? await db.Database.BeginTransactionAsync(ct) : null;
 
+        var releasedCount = 0;
         foreach (var allocation in expiredAllocations)
         {
-            allocation.State = OrderStockAllocationState.Released;
-            allocation.ReleasedAt ??= now;
-            await IncrementStockAsync(allocation.ProductVariantId, allocation.Quantity, ct);
+            var allocationRowsAffected = await db.OrderStockAllocations
+                .Where(row => row.Id == allocation.Id
+                    && !row.OrderId.HasValue
+                    && row.State == OrderStockAllocationState.Held
+                    && row.HoldExpiresAt.HasValue
+                    && row.HoldExpiresAt <= orphanReleaseCutoff)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.State, OrderStockAllocationState.Released)
+                    .SetProperty(row => row.ReleasedAt, now), ct);
+
+            if (allocationRowsAffected == 0)
+                continue;
+
+            var variantRowsAffected = await IncrementStockAsync(
+                allocation.ProductVariantId,
+                allocation.Quantity,
+                ct);
+
+            if (variantRowsAffected == 0)
+                throw new DbUpdateConcurrencyException(
+                    "Stock cleanup could not restore stock for an orphaned hold.");
+
+            releasedCount++;
         }
 
-        await db.SaveChangesAsync(ct);
         if (transaction is not null)
             await transaction.CommitAsync(ct);
 
         logger.LogInformation(
-            "Cleaned up {Count} expired stock allocations", expiredAllocations.Count);
+            "Cleaned up {Count} expired stock allocations", releasedCount);
 
-        return expiredAllocations.Count;
+        return releasedCount;
     }
 
     private Task<int> IncrementStockAsync(Guid variantId, int quantity, CancellationToken ct)

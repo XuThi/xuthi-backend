@@ -51,13 +51,17 @@ internal class RestoreCreatedOrderStockHandler(ProductCatalogDbContext db)
                         "Stock lifecycle restore did not apply to all committed allocations.");
                 }
 
-                await db.Variants
+                var variantRowsAffected = await db.Variants
                     .Where(variant => variant.Id == allocation.ProductVariantId)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(
                             variant => variant.StockQuantity,
                             variant => variant.StockQuantity + allocation.Quantity),
                         cancellationToken);
+
+                if (variantRowsAffected == 0)
+                    throw new DbUpdateConcurrencyException(
+                        "Stock lifecycle restore could not restore stock for an allocation.");
             }
 
             db.OrderStockLifecycleEventFacts.Add(new OrderStockLifecycleEventFact
