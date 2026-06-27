@@ -934,7 +934,7 @@ public sealed class CartQuoteCheckoutTests
         var applied = await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "race25"));
         Assert.True(applied.Success, applied.ErrorMessage);
 
-        app.OnReserveStock(async ct => await app.ExhaustVoucherAsync("RACE25", ct));
+        app.OnStockLifecycleHold(async ct => await app.ExhaustVoucherAsync("RACE25", ct));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
@@ -946,7 +946,9 @@ public sealed class CartQuoteCheckoutTests
                 ShippingCity: "Ha Noi",
                 ShippingWard: "Ward 1",
                 ShippingNote: null,
-                PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId)));
+                PaymentMethod: PaymentMethod.PayOS,
+                ReturnUrl: "https://shop.example/checkout/return",
+                CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("hết lượt", ex.Message);
 
@@ -1364,6 +1366,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         stockReservation.OnReserveAsync = onReserve;
     }
 
+    public void OnStockLifecycleHold(Func<CancellationToken, Task> onHold)
+    {
+        var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
+        stockLifecycle.OnHoldAsync = onHold;
+    }
+
     public void OnConfirmStock(Func<CancellationToken, Task> onConfirm)
     {
         var stockReservation = (TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>();
@@ -1371,6 +1379,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     }
 
     public void SetNextStockLifecycleHoldResult(StockLifecycleResult result)
+    {
+        var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
+        stockLifecycle.NextResult = result;
+    }
+
+    public void SetNextStockLifecycleCommitResult(StockLifecycleResult result)
     {
         var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
         stockLifecycle.NextResult = result;
@@ -1617,6 +1631,7 @@ internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
     private readonly List<StockLifecycleReleaseAttempt> _releases = [];
 
     public StockLifecycleResult? NextResult { get; set; }
+    public Func<CancellationToken, Task>? OnHoldAsync { get; set; }
 
     public IReadOnlyList<StockLifecycleHoldAttempt> Holds => _holds;
 
@@ -1624,10 +1639,13 @@ internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
 
     public IReadOnlyList<StockLifecycleReleaseAttempt> Releases => _releases;
 
-    public Task<StockLifecycleResult> Handle(
+    public async Task<StockLifecycleResult> Handle(
         HoldOrderAttemptStockCommand request,
         CancellationToken cancellationToken)
     {
+        if (OnHoldAsync is not null)
+            await OnHoldAsync(cancellationToken);
+
         var normalizedLines = NormalizeLines(request.Lines);
         var result = NextResult ?? StockLifecycleResult.Succeeded(normalizedLines);
         NextResult = null;
@@ -1641,7 +1659,7 @@ internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
                 request.HoldExpiresAt - timeProvider.GetUtcNow().UtcDateTime));
         }
 
-        return Task.FromResult(result);
+        return result;
     }
 
     public Task<StockLifecycleResult> Handle(

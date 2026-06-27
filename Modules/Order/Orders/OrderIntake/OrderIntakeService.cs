@@ -227,9 +227,6 @@ internal class OrderIntake(
         var sessionKey = $"order:{order.Id}";
         order.ReservationSessionKey = sessionKey;
 
-        var stockHoldTtl = request.PaymentMethod == PaymentMethod.PayOS
-            ? paymentSettlementGraceEndsAt!.Value - now
-            : (TimeSpan?)null;
         var stockLines = quote.Items
             .Select(i => new StockLifecycleLine(i.VariantId, i.Quantity))
             .ToList();
@@ -245,17 +242,8 @@ internal class OrderIntake(
                     stockLines,
                     paymentSettlementGraceEndsAt!.Value.UtcDateTime), cancellationToken);
                 EnsureStockLifecycleSuccess(holdResult);
+                stockReserved = true;
             }
-            else
-            {
-                await stockReservation.ReserveStockAsync(
-                    sessionKey,
-                    quote.Items.Select(i => (i.VariantId, i.Quantity)).ToList(),
-                    stockHoldTtl,
-                    cancellationToken);
-            }
-
-            stockReserved = true;
 
             orderDb.Orders.Add(order);
             await orderDb.SaveChangesAsync(cancellationToken);
@@ -299,7 +287,13 @@ internal class OrderIntake(
                 await sender.Send(new ConsumeQuotedCartCommand(request.CartId, request.CustomerId), cancellationToken);
                 cartConsumed = true;
 
-                await stockReservation.ConfirmReservationsAsync(sessionKey, order.Id, cancellationToken);
+                var stockCommitResult = await sender.Send(new CommitOrderStockCommand(
+                    order.Id,
+                    StockLifecycleExpectedPriorState.None,
+                    stockLines), cancellationToken);
+                EnsureStockLifecycleSuccess(
+                    stockCommitResult,
+                    "commit this Created Order's stock");
                 stockConfirmed = true;
 
                 if (order.VoucherId.HasValue)
@@ -685,11 +679,6 @@ internal class OrderIntake(
             EnsureStockLifecycleSuccess(result, "release this Order Attempt's Stock Hold");
             return;
         }
-
-        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
-            await stockReservation.ReleaseReservationsAsync(
-                order.ReservationSessionKey,
-                cancellationToken);
     }
 
     private static void EnsureStockLifecycleSuccess(

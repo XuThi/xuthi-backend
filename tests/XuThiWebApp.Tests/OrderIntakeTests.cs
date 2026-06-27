@@ -1647,13 +1647,22 @@ public sealed class OrderIntakeTests
 
         Assert.Contains("order save failed", ex.Message);
 
-        var stockHold = Assert.Single(app.StockReservations);
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal(stockHold.SessionKey, release.SessionKey);
+        if (paymentMethod == PaymentMethod.PayOS)
+        {
+            var stockHold = Assert.Single(app.StockReservations);
+            var release = Assert.Single(app.StockReleases);
+            Assert.Equal(stockHold.SessionKey, release.SessionKey);
 
-        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            app.SendInNewScopeAsync(new GetOrderQuery(Id: orderId)));
+            var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+            await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+                app.SendInNewScopeAsync(new GetOrderQuery(Id: orderId)));
+        }
+        else
+        {
+            Assert.Empty(app.StockReservations);
+            Assert.Empty(app.StockReleases);
+            Assert.Empty(app.StockLifecycleCommits);
+        }
 
         var cart = await app.GetCartStateAsync(addResult.CartId);
         Assert.Equal(CartStatus.Active, cart.Status);
@@ -1851,8 +1860,10 @@ public sealed class OrderIntakeTests
         Assert.Equal(first.Status, retry.Status);
         Assert.Null(retry.PaymentUrl);
 
-        Assert.Single(app.StockReservations);
-        Assert.Single(app.StockConfirmations);
+        Assert.Empty(app.StockReservations);
+        var lifecycleCommit = Assert.Single(app.StockLifecycleCommits);
+        Assert.Equal(first.OrderId, lifecycleCommit.OrderId);
+        Assert.Equal(StockLifecycleExpectedPriorState.None, lifecycleCommit.ExpectedPriorState);
         Assert.Single(app.CreatedOrderEvents);
         Assert.Empty(app.PaymentLinkAttempts);
     }
@@ -1890,12 +1901,17 @@ public sealed class OrderIntakeTests
         Assert.Null(checkout.PaymentUrl);
         Assert.Empty(app.PaymentLinkAttempts);
 
-        var confirmation = Assert.Single(app.StockConfirmations);
-        Assert.Equal(checkout.OrderId, confirmation.OrderId);
+        Assert.Empty(app.StockReservations);
+        var lifecycleCommit = Assert.Single(app.StockLifecycleCommits);
+        Assert.Equal(checkout.OrderId, lifecycleCommit.OrderId);
+        Assert.Equal(StockLifecycleExpectedPriorState.None, lifecycleCommit.ExpectedPriorState);
+        var committedLine = Assert.Single(lifecycleCommit.Lines);
+        Assert.Equal(item.VariantId, committedLine.ProductVariantId);
+        Assert.Equal(1, committedLine.Quantity);
     }
 
     [Fact]
-    public async Task Manual_payment_order_intake_failure_after_consuming_cart_restores_cart_and_releases_holds()
+    public async Task Manual_payment_order_intake_translates_stock_lifecycle_failure_and_restores_cart()
     {
         await using var app = new CommerceTestApp();
         var item = await app.SeedCatalogItemAsync(price: 100m, stockQuantity: 5);
@@ -1915,7 +1931,9 @@ public sealed class OrderIntakeTests
 
         var voucherId = await app.GetVoucherIdAsync("MANUALFAIL10");
         await app.Sender.Send(new ApplyVoucherCommand(addResult.CartId, "manualfail10"));
-        app.OnConfirmStock(_ => throw new InvalidOperationException("stock confirmation failed"));
+        app.SetNextStockLifecycleCommitResult(StockLifecycleResult.InsufficientStock(
+            [new StockLifecycleLine(item.VariantId, 1)],
+            [new StockLifecycleInsufficientStockDetail(item.VariantId, 1, 0)]));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Sender.Send(new CheckoutCommand(new CheckoutRequest(
@@ -1929,15 +1947,12 @@ public sealed class OrderIntakeTests
                 ShippingNote: null,
                 PaymentMethod: PaymentMethod.BankTransfer), app.DefaultExternalUserId)));
 
-        Assert.Contains("stock confirmation failed", ex.Message);
+        Assert.Contains("Insufficient stock", ex.Message);
 
-        var stockHold = Assert.Single(app.StockReservations);
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal(stockHold.SessionKey, release.SessionKey);
-
-        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            app.Sender.Send(new GetOrderQuery(Id: orderId)));
+        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleCommits);
+        Assert.Empty((await app.Sender.Send(new GetOrdersQuery(PageSize: 100))).Orders);
 
         var cart = await app.GetCartStateAsync(addResult.CartId);
         Assert.Equal(CartStatus.Active, cart.Status);

@@ -30,17 +30,31 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
         if (quantityFailures.Count > 0)
             return StockLifecycleResult.ValidationFailed(quantityFailures);
 
-        if (command.ExpectedPriorState != StockLifecycleExpectedPriorState.Held)
+        return command.ExpectedPriorState switch
         {
-            return StockLifecycleResult.ValidationFailed(
+            StockLifecycleExpectedPriorState.Held => await CommitHeldStockAsync(
+                command,
+                normalizedLines,
+                cancellationToken),
+            StockLifecycleExpectedPriorState.None => await CommitDirectStockAsync(
+                command,
+                normalizedLines,
+                cancellationToken),
+            _ => StockLifecycleResult.ValidationFailed(
                 [new StockLifecycleValidationDetail(
                     null,
                     "UnsupportedExpectedPriorState",
-                    "Only Held prior stock state is supported by this commit path.")]);
-        }
+                    "Unsupported expected prior stock state.")])
+        };
+    }
 
+    private async Task<StockLifecycleResult> CommitHeldStockAsync(
+        CommitOrderStockCommand command,
+        IReadOnlyList<StockLifecycleLine> normalizedLines,
+        CancellationToken cancellationToken)
+    {
         var allocations = await LoadAllocationsAsync(command.OrderId, cancellationToken);
-        var commitDecision = EvaluateExistingCommit(command.OrderId, normalizedLines, allocations);
+        var commitDecision = EvaluateHeldCommit(command.OrderId, normalizedLines, allocations);
 
         if (!commitDecision.ShouldCommit)
             return commitDecision.Result;
@@ -67,7 +81,7 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
                     await transaction.RollbackAsync(cancellationToken);
 
                 db.ChangeTracker.Clear();
-                var afterRace = EvaluateExistingCommit(
+                var afterRace = EvaluateHeldCommit(
                     command.OrderId,
                     normalizedLines,
                     await LoadAllocationsAsync(command.OrderId, cancellationToken));
@@ -79,15 +93,7 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
                     "Stock lifecycle commit did not apply to all held allocations.");
             }
 
-            db.OrderStockLifecycleEventFacts.Add(new OrderStockLifecycleEventFact
-            {
-                Id = Guid.NewGuid(),
-                OrderId = command.OrderId,
-                EventType = nameof(OrderStockCommitted),
-                IdempotencyKey = $"stock:{command.OrderId}:committed",
-                OccurredAt = now,
-                LinesJson = JsonSerializer.Serialize(commitDecision.Result.Lines)
-            });
+            AddCommittedFact(command.OrderId, commitDecision.Result.Lines, now);
 
             await db.SaveChangesAsync(cancellationToken);
 
@@ -100,7 +106,7 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
                 await transaction.RollbackAsync(cancellationToken);
 
             db.ChangeTracker.Clear();
-            var afterRace = EvaluateExistingCommit(
+            var afterRace = EvaluateHeldCommit(
                 command.OrderId,
                 normalizedLines,
                 await LoadAllocationsAsync(command.OrderId, cancellationToken));
@@ -114,6 +120,147 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
         return commitDecision.Result;
     }
 
+    private async Task<StockLifecycleResult> CommitDirectStockAsync(
+        CommitOrderStockCommand command,
+        IReadOnlyList<StockLifecycleLine> normalizedLines,
+        CancellationToken cancellationToken)
+    {
+        var allocations = await LoadAllocationsAsync(command.OrderId, cancellationToken);
+        var commitDecision = EvaluateDirectCommit(command.OrderId, normalizedLines, allocations);
+
+        if (!commitDecision.ShouldCommit)
+            return commitDecision.Result;
+
+        var variants = await LoadVariantsAsync(normalizedLines, cancellationToken);
+        var variantsById = variants.ToDictionary(variant => variant.Id);
+        var validationFailures = normalizedLines
+            .Where(line => !variantsById.TryGetValue(line.ProductVariantId, out var variant)
+                || variant.IsDeleted
+                || !variant.IsActive)
+            .Select(line => new StockLifecycleValidationDetail(
+                line.ProductVariantId,
+                "ProductVariantUnavailable",
+                $"Product Variant {line.ProductVariantId} is missing, deleted, or inactive."))
+            .ToList();
+
+        if (validationFailures.Count > 0)
+            return StockLifecycleResult.ValidationFailed(validationFailures);
+
+        var insufficientStock = normalizedLines
+            .Where(line => variantsById[line.ProductVariantId].StockQuantity < line.Quantity)
+            .Select(line => new StockLifecycleInsufficientStockDetail(
+                line.ProductVariantId,
+                line.Quantity,
+                variantsById[line.ProductVariantId].StockQuantity))
+            .ToList();
+
+        if (insufficientStock.Count > 0)
+            return StockLifecycleResult.InsufficientStock(normalizedLines, insufficientStock);
+
+        var now = DateTime.UtcNow;
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction
+            ? await db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        try
+        {
+            foreach (var line in normalizedLines)
+            {
+                var rowsAffected = await db.Variants
+                    .Where(variant => variant.Id == line.ProductVariantId
+                        && !variant.IsDeleted
+                        && variant.IsActive
+                        && variant.StockQuantity >= line.Quantity)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(
+                            variant => variant.StockQuantity,
+                            variant => variant.StockQuantity - line.Quantity),
+                        cancellationToken);
+
+                if (rowsAffected == 0)
+                {
+                    if (transaction is not null)
+                        await transaction.RollbackAsync(cancellationToken);
+
+                    db.ChangeTracker.Clear();
+                    var afterRace = EvaluateDirectCommit(
+                        command.OrderId,
+                        normalizedLines,
+                        await LoadAllocationsAsync(command.OrderId, cancellationToken));
+
+                    if (!afterRace.ShouldCommit)
+                        return afterRace.Result;
+
+                    var availableQuantity = await db.Variants
+                        .Where(variant => variant.Id == line.ProductVariantId)
+                        .Select(variant => (int?)variant.StockQuantity)
+                        .SingleOrDefaultAsync(cancellationToken)
+                        ?? 0;
+
+                    return StockLifecycleResult.InsufficientStock(
+                        normalizedLines,
+                        [new StockLifecycleInsufficientStockDetail(
+                            line.ProductVariantId,
+                            line.Quantity,
+                            availableQuantity)]);
+                }
+            }
+
+            db.OrderStockAllocations.AddRange(normalizedLines.Select(line =>
+                new OrderStockAllocation
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = command.OrderId,
+                    ProductVariantId = line.ProductVariantId,
+                    Quantity = line.Quantity,
+                    State = OrderStockAllocationState.Committed,
+                    CommittedAt = now
+                }));
+
+            AddCommittedFact(command.OrderId, commitDecision.Result.Lines, now);
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            if (transaction is not null)
+                await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            if (transaction is not null)
+                await transaction.RollbackAsync(cancellationToken);
+
+            db.ChangeTracker.Clear();
+            var afterRace = EvaluateDirectCommit(
+                command.OrderId,
+                normalizedLines,
+                await LoadAllocationsAsync(command.OrderId, cancellationToken));
+
+            if (!afterRace.ShouldCommit)
+                return afterRace.Result;
+
+            throw;
+        }
+
+        return commitDecision.Result;
+    }
+
+    private void AddCommittedFact(
+        Guid orderId,
+        IReadOnlyList<StockLifecycleLine> lines,
+        DateTime occurredAt)
+    {
+        db.OrderStockLifecycleEventFacts.Add(new OrderStockLifecycleEventFact
+        {
+            Id = Guid.NewGuid(),
+            OrderId = orderId,
+            EventType = nameof(OrderStockCommitted),
+            IdempotencyKey = $"stock:{orderId}:committed",
+            OccurredAt = occurredAt,
+            LinesJson = JsonSerializer.Serialize(lines)
+        });
+    }
+
     private Task<List<OrderStockAllocation>> LoadAllocationsAsync(
         Guid orderId,
         CancellationToken cancellationToken)
@@ -122,6 +269,25 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
             .AsNoTracking()
             .Where(allocation => allocation.OrderId == orderId)
             .OrderBy(allocation => allocation.ProductVariantId)
+            .ToListAsync(cancellationToken);
+    }
+
+    private Task<List<Variant>> LoadVariantsAsync(
+        IReadOnlyList<StockLifecycleLine> lines,
+        CancellationToken cancellationToken)
+    {
+        var variantIds = lines.Select(line => line.ProductVariantId).ToList();
+
+        return db.Variants
+            .AsNoTracking()
+            .Where(variant => variantIds.Contains(variant.Id))
+            .Select(variant => new Variant
+            {
+                Id = variant.Id,
+                StockQuantity = variant.StockQuantity,
+                IsActive = variant.IsActive,
+                IsDeleted = variant.IsDeleted
+            })
             .ToListAsync(cancellationToken);
     }
 
@@ -136,7 +302,7 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
             .ToList();
     }
 
-    private static CommitDecision EvaluateExistingCommit(
+    private static CommitDecision EvaluateHeldCommit(
         Guid orderId,
         IReadOnlyList<StockLifecycleLine> normalizedLines,
         IReadOnlyList<OrderStockAllocation> allocations)
@@ -178,6 +344,46 @@ internal class CommitOrderStockHandler(ProductCatalogDbContext db)
             OrderStockAllocationState.Held.ToString(),
             existingState,
             $"Existing stock lifecycle allocation for Order {orderId} cannot be committed as the requested Stock Hold.",
+            allocations
+                .Where(allocation => allocation.HoldExpiresAt.HasValue)
+                .Select(allocation => allocation.HoldExpiresAt!.Value)
+                .DefaultIfEmpty()
+                .Min()));
+    }
+
+    private static CommitDecision EvaluateDirectCommit(
+        Guid orderId,
+        IReadOnlyList<StockLifecycleLine> normalizedLines,
+        IReadOnlyList<OrderStockAllocation> allocations)
+    {
+        var existingLines = allocations
+            .Select(allocation => new StockLifecycleLine(
+                allocation.ProductVariantId,
+                allocation.Quantity))
+            .OrderBy(line => line.ProductVariantId)
+            .ToList();
+
+        if (allocations.Count == 0)
+            return CommitDecision.Commit(StockLifecycleResult.Succeeded(normalizedLines));
+
+        var linesMatch = normalizedLines.SequenceEqual(existingLines);
+
+        if (linesMatch && allocations.All(allocation => allocation.State == OrderStockAllocationState.Committed))
+            return CommitDecision.Done(StockLifecycleResult.Succeeded(existingLines));
+
+        var existingState = string.Join(
+            ",",
+            allocations
+                .Select(allocation => allocation.State.ToString())
+                .Distinct()
+                .Order());
+
+        return CommitDecision.Done(Conflict(
+            normalizedLines,
+            existingLines,
+            StockLifecycleExpectedPriorState.None.ToString(),
+            existingState,
+            $"Existing stock lifecycle allocation for Order {orderId} cannot be committed directly because manual-payment commits expect no prior Stock Hold.",
             allocations
                 .Where(allocation => allocation.HoldExpiresAt.HasValue)
                 .Select(allocation => allocation.HoldExpiresAt!.Value)
