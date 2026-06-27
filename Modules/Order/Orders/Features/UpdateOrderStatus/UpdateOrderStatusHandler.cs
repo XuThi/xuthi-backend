@@ -1,4 +1,4 @@
-using ProductCatalog.Products.Services;
+using Contracts;
 
 namespace Order.Orders.Features.UpdateOrderStatus;
 
@@ -18,7 +18,7 @@ public record UpdateOrderStatusResult(
 
 internal class UpdateOrderStatusHandler(
     OrderDbContext orderDb,
-    IStockReservationService stockReservation,
+    ISender sender,
     TimeProvider timeProvider)
     : ICommandHandler<UpdateOrderStatusCommand, UpdateOrderStatusResult>
 {
@@ -42,11 +42,12 @@ internal class UpdateOrderStatusHandler(
 
         if (command.NewStatus == OrderStatus.Cancelled)
         {
-            if (!string.IsNullOrEmpty(order.ReservationSessionKey))
-            {
-                await stockReservation.ReleaseReservationsAsync(order.ReservationSessionKey, cancellationToken);
-                await stockReservation.RestoreConfirmedReservationsAsync(order.ReservationSessionKey, order.Id, cancellationToken);
-            }
+            var restoreResult = await sender.Send(
+                new RestoreCreatedOrderStockCommand(order.Id),
+                cancellationToken);
+            EnsureStockLifecycleSuccess(
+                restoreResult,
+                "restore this Created Order's Stock Commitment");
         }
 
         await orderDb.SaveChangesAsync(cancellationToken);
@@ -58,5 +59,29 @@ internal class UpdateOrderStatusHandler(
             command.NewStatus.ToString(),
             order.UpdatedAt!.Value
         );
+    }
+
+    private static void EnsureStockLifecycleSuccess(
+        StockLifecycleResult result,
+        string operationDescription)
+    {
+        if (result.IsSuccess)
+            return;
+
+        var message = result.Status switch
+        {
+            StockLifecycleResultStatus.ValidationFailed => string.Join(
+                " ",
+                result.ValidationDetails.Select(detail => detail.Message)),
+            StockLifecycleResultStatus.InsufficientStock => string.Join(
+                " ",
+                result.InsufficientStockDetails.Select(detail =>
+                    $"Insufficient stock for Product Variant {detail.ProductVariantId}. Requested {detail.RequestedQuantity}, available {detail.AvailableQuantity}.")),
+            StockLifecycleResultStatus.Conflict => result.Conflict?.Reason
+                ?? "Stock lifecycle conflict for this Created Order.",
+            _ => $"Stock lifecycle could not {operationDescription}."
+        };
+
+        throw new InvalidOperationException(message);
     }
 }

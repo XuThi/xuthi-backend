@@ -1120,6 +1120,8 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             sp.GetRequiredService<TestStockLifecycleHandler>());
         services.AddScoped<IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
             sp.GetRequiredService<TestStockLifecycleHandler>());
+        services.AddScoped<IRequestHandler<RestoreCreatedOrderStockCommand, StockLifecycleResult>>(sp =>
+            sp.GetRequiredService<TestStockLifecycleHandler>());
         services.AddScoped<IPaymentService, TestPaymentService>();
         services.AddOrderIntake();
 
@@ -1207,6 +1209,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public IReadOnlyList<StockLifecycleReleaseAttempt> StockLifecycleReleases
         => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Releases;
+
+    public IReadOnlyList<StockLifecycleRestoreAttempt> StockLifecycleRestores
+        => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Restores;
 
     public IReadOnlyList<StockLifecycleCommitAttempt> StockLifecycleCommits
         => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Commits;
@@ -1385,6 +1390,12 @@ internal sealed class CommerceTestApp : IAsyncDisposable
     }
 
     public void SetNextStockLifecycleCommitResult(StockLifecycleResult result)
+    {
+        var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
+        stockLifecycle.NextResult = result;
+    }
+
+    public void SetNextStockLifecycleRestoreResult(StockLifecycleResult result)
     {
         var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
         stockLifecycle.NextResult = result;
@@ -1599,6 +1610,8 @@ internal sealed record StockLifecycleCommitAttempt(
 
 internal sealed record StockLifecycleReleaseAttempt(Guid OrderId);
 
+internal sealed record StockLifecycleRestoreAttempt(Guid OrderId);
+
 internal sealed record PaymentLinkAttempt(
     Guid OrderId,
     string OrderNumber,
@@ -1624,11 +1637,13 @@ internal sealed record PaymentLinkCancellation(long OrderCode, string Reason);
 internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
     : IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>,
       IRequestHandler<CommitOrderStockCommand, StockLifecycleResult>,
-      IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>
+      IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>,
+      IRequestHandler<RestoreCreatedOrderStockCommand, StockLifecycleResult>
 {
     private readonly List<StockLifecycleHoldAttempt> _holds = [];
     private readonly List<StockLifecycleCommitAttempt> _commits = [];
     private readonly List<StockLifecycleReleaseAttempt> _releases = [];
+    private readonly List<StockLifecycleRestoreAttempt> _restores = [];
 
     public StockLifecycleResult? NextResult { get; set; }
     public Func<CancellationToken, Task>? OnHoldAsync { get; set; }
@@ -1638,6 +1653,8 @@ internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
     public IReadOnlyList<StockLifecycleCommitAttempt> Commits => _commits;
 
     public IReadOnlyList<StockLifecycleReleaseAttempt> Releases => _releases;
+
+    public IReadOnlyList<StockLifecycleRestoreAttempt> Restores => _restores;
 
     public async Task<StockLifecycleResult> Handle(
         HoldOrderAttemptStockCommand request,
@@ -1687,6 +1704,19 @@ internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
     {
         _releases.Add(new StockLifecycleReleaseAttempt(request.OrderId));
         return Task.FromResult(StockLifecycleResult.Succeeded([]));
+    }
+
+    public Task<StockLifecycleResult> Handle(
+        RestoreCreatedOrderStockCommand request,
+        CancellationToken cancellationToken)
+    {
+        var result = NextResult ?? StockLifecycleResult.Succeeded([]);
+        NextResult = null;
+
+        if (result.IsSuccess)
+            _restores.Add(new StockLifecycleRestoreAttempt(request.OrderId));
+
+        return Task.FromResult(result);
     }
 
     private static List<StockLifecycleLine> NormalizeLines(IReadOnlyList<StockLifecycleLine> lines)

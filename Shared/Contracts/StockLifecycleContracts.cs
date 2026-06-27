@@ -16,6 +16,9 @@ public record CommitOrderStockCommand(
 public record ReleaseOrderAttemptStockCommand(Guid OrderId)
     : ICommand<StockLifecycleResult>, ISkipTransaction;
 
+public record RestoreCreatedOrderStockCommand(Guid OrderId)
+    : ICommand<StockLifecycleResult>, ISkipTransaction;
+
 public record StockLifecycleLine(Guid ProductVariantId, int Quantity);
 
 public enum StockLifecycleExpectedPriorState
@@ -111,6 +114,12 @@ public record OrderStockCommitted(
     string IdempotencyKey);
 
 public record OrderStockHoldReleased(
+    Guid OrderId,
+    IReadOnlyList<StockLifecycleLine> Lines,
+    DateTime OccurredAt,
+    string IdempotencyKey);
+
+public record OrderStockCommitmentRestored(
     Guid OrderId,
     IReadOnlyList<StockLifecycleLine> Lines,
     DateTime OccurredAt,

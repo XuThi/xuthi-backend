@@ -72,7 +72,7 @@ public sealed class OrderIntakeTests
     }
 
     [Fact]
-    public async Task Broader_order_status_cancellation_preserves_stock_release_and_publishes_outcome()
+    public async Task Broader_order_status_cancellation_restores_created_order_stock_by_order_id_and_publishes_outcome()
     {
         var now = new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero);
         await using var app = new CommerceTestApp(now);
@@ -111,10 +111,11 @@ public sealed class OrderIntakeTests
         Assert.Equal(cancelledAt, order.CancelledAt);
         Assert.Equal("Customer requested cancellation", order.CancellationReason);
 
-        var release = Assert.Single(app.LegacyStockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
-        var restore = Assert.Single(app.StockRestores);
+        var restore = Assert.Single(app.StockLifecycleRestores);
         Assert.Equal(checkout.OrderId, restore.OrderId);
+        Assert.Empty(app.StockLifecycleReleases);
+        Assert.Empty(app.LegacyStockReleases);
+        Assert.Empty(app.StockRestores);
 
         var outcome = Assert.Single(app.CustomerOrderOutcomeEvents);
         Assert.Equal(CustomerOrderOutcome.Cancelled, outcome.Outcome);
@@ -164,6 +165,8 @@ public sealed class OrderIntakeTests
         Assert.Equal(CustomerOrderOutcome.Returned, outcome.Outcome);
         Assert.Equal(returnedAt, outcome.OccurredAt);
         Assert.Equal(checkout.OrderId, outcome.OrderId);
+        Assert.Empty(app.StockLifecycleRestores);
+        Assert.Empty(app.StockRestores);
     }
 
     [Fact]
