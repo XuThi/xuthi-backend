@@ -279,6 +279,13 @@ public sealed class OrderIntakeTests
         Assert.Equal($"order:{checkout.OrderId}", confirmation.SessionKey);
         Assert.Equal(checkout.OrderId, confirmation.OrderId);
 
+        var lifecycleCommit = Assert.Single(app.StockLifecycleCommits);
+        Assert.Equal(checkout.OrderId, lifecycleCommit.OrderId);
+        Assert.Equal(StockLifecycleExpectedPriorState.Held, lifecycleCommit.ExpectedPriorState);
+        var committedLine = Assert.Single(lifecycleCommit.Lines);
+        Assert.Equal(item.VariantId, committedLine.ProductVariantId);
+        Assert.Equal(1, committedLine.Quantity);
+
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
         Assert.Equal(VoucherUsageStatus.Finalized, usage.Status);

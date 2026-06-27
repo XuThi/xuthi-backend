@@ -488,14 +488,16 @@ internal class OrderIntake(
             order.PaidAt ??= now;
             order.Status = OrderStatus.Confirmed;
 
-            if (!string.IsNullOrEmpty(order.ReservationSessionKey))
-            {
-                await stockReservation.ConfirmReservationsAsync(
-                    order.ReservationSessionKey,
-                    order.Id,
-                    cancellationToken);
-                stockConfirmed = true;
-            }
+            var stockCommitResult = await sender.Send(new CommitOrderStockCommand(
+                order.Id,
+                StockLifecycleExpectedPriorState.Held,
+                order.Items
+                    .Select(item => new StockLifecycleLine(item.VariantId, item.Quantity))
+                    .ToList()), cancellationToken);
+            EnsureStockLifecycleSuccess(
+                stockCommitResult,
+                "commit this Created Order's Stock Hold");
+            stockConfirmed = true;
 
             if (order.VoucherId.HasValue)
             {
