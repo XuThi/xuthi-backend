@@ -263,7 +263,7 @@ internal class OrderIntake(
         catch
         {
             if (stockReserved)
-                await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+                await ReleaseOrderAttemptStockAsync(order, cancellationToken);
 
             DetachOrderAttempt(order);
             throw;
@@ -282,7 +282,7 @@ internal class OrderIntake(
         }
         catch
         {
-            await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+            await ReleaseOrderAttemptStockAsync(order, cancellationToken);
             await RemoveOrderAttemptRecordAsync(order, cancellationToken);
             throw;
         }
@@ -329,7 +329,7 @@ internal class OrderIntake(
                 }
                 else
                 {
-                    await stockReservation.ReleaseReservationsAsync(sessionKey, cancellationToken);
+                    await ReleaseOrderAttemptStockAsync(order, cancellationToken);
                 }
 
                 if (cartConsumed)
@@ -633,12 +633,7 @@ internal class OrderIntake(
         order.CancelledAt ??= now;
         order.CancellationReason ??= reason;
 
-        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
-        {
-            await stockReservation.ReleaseReservationsAsync(
-                order.ReservationSessionKey,
-                cancellationToken);
-        }
+        await ReleaseOrderAttemptStockAsync(order, cancellationToken);
 
         if (order.VoucherId.HasValue && order.CreatedOrderAt is null)
         {
@@ -654,12 +649,7 @@ internal class OrderIntake(
         CustomerOrder order,
         CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
-        {
-            await stockReservation.ReleaseReservationsAsync(
-                order.ReservationSessionKey,
-                cancellationToken);
-        }
+        await ReleaseOrderAttemptStockAsync(order, cancellationToken);
 
         if (order.VoucherId.HasValue)
         {
@@ -681,7 +671,28 @@ internal class OrderIntake(
             order.Id), cancellationToken);
     }
 
-    private static void EnsureStockLifecycleSuccess(StockLifecycleResult result)
+    private async Task ReleaseOrderAttemptStockAsync(
+        CustomerOrder order,
+        CancellationToken cancellationToken)
+    {
+        if (order.PaymentMethod == PaymentMethod.PayOS)
+        {
+            var result = await sender.Send(
+                new ReleaseOrderAttemptStockCommand(order.Id),
+                cancellationToken);
+            EnsureStockLifecycleSuccess(result, "release this Order Attempt's Stock Hold");
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(order.ReservationSessionKey))
+            await stockReservation.ReleaseReservationsAsync(
+                order.ReservationSessionKey,
+                cancellationToken);
+    }
+
+    private static void EnsureStockLifecycleSuccess(
+        StockLifecycleResult result,
+        string operationDescription = "hold this Order Attempt")
     {
         if (result.IsSuccess)
             return;
@@ -697,7 +708,7 @@ internal class OrderIntake(
                     $"Insufficient stock for Product Variant {detail.ProductVariantId}. Requested {detail.RequestedQuantity}, available {detail.AvailableQuantity}.")),
             StockLifecycleResultStatus.Conflict => result.Conflict?.Reason
                 ?? "Stock lifecycle conflict for this Order Attempt.",
-            _ => "Stock lifecycle could not hold this Order Attempt."
+            _ => $"Stock lifecycle could not {operationDescription}."
         };
 
         throw new InvalidOperationException(message);

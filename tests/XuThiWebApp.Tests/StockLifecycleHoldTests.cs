@@ -297,6 +297,19 @@ internal sealed class ProductCatalogStockLifecycleTestApp : IAsyncDisposable
                 fact.IdempotencyKey))
             .ToList();
 
+    public IReadOnlyList<OrderStockHoldReleased> ReleasedFacts
+        => Db.OrderStockLifecycleEventFacts
+            .AsNoTracking()
+            .Where(fact => fact.EventType == nameof(OrderStockHoldReleased))
+            .OrderBy(fact => fact.OccurredAt)
+            .ToList()
+            .Select(fact => new OrderStockHoldReleased(
+                fact.OrderId,
+                JsonSerializer.Deserialize<List<StockLifecycleLine>>(fact.LinesJson) ?? [],
+                fact.OccurredAt,
+                fact.IdempotencyKey))
+            .ToList();
+
     public async Task<CatalogStockItem> SeedCatalogItemAsync(
         int stockQuantity,
         Action<Variant>? configureVariant = null)

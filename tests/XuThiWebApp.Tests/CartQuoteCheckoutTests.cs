@@ -1114,6 +1114,8 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         services.AddScoped<TestStockLifecycleHandler>();
         services.AddScoped<IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
             sp.GetRequiredService<TestStockLifecycleHandler>());
+        services.AddScoped<IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
+            sp.GetRequiredService<TestStockLifecycleHandler>());
         services.AddScoped<IPaymentService, TestPaymentService>();
         services.AddOrderIntake();
 
@@ -1141,6 +1143,22 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Confirmations;
 
     public IReadOnlyList<StockRelease> StockReleases
+    {
+        get
+        {
+            var legacy = ((TestStockReservationService)_scope.ServiceProvider
+                    .GetRequiredService<IStockReservationService>())
+                .Releases;
+            var lifecycle = _scope.ServiceProvider
+                .GetRequiredService<TestStockLifecycleHandler>()
+                .Releases
+                .Select(release => new StockRelease($"order:{release.OrderId}"));
+
+            return legacy.Concat(lifecycle).ToList();
+        }
+    }
+
+    public IReadOnlyList<StockRelease> LegacyStockReleases
         => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Releases;
 
     public IReadOnlyList<StockRestore> StockRestores
@@ -1169,6 +1187,9 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public IReadOnlyList<StockLifecycleHoldAttempt> StockLifecycleHolds
         => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Holds;
+
+    public IReadOnlyList<StockLifecycleReleaseAttempt> StockLifecycleReleases
+        => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Releases;
 
     public IReadOnlyList<OrderCreatedEvent> CreatedOrderEvents
         => _scope.ServiceProvider.GetRequiredService<TestOrderCreatedEventRecorder>().Events;
@@ -1539,6 +1560,8 @@ internal sealed record StockLifecycleHoldAttempt(
     DateTime HoldExpiresAt,
     TimeSpan? Ttl);
 
+internal sealed record StockLifecycleReleaseAttempt(Guid OrderId);
+
 internal sealed record PaymentLinkAttempt(
     Guid OrderId,
     string OrderNumber,
@@ -1562,13 +1585,17 @@ internal sealed record PaymentLinkAttemptItem(
 internal sealed record PaymentLinkCancellation(long OrderCode, string Reason);
 
 internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
-    : IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>
+    : IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>,
+      IRequestHandler<ReleaseOrderAttemptStockCommand, StockLifecycleResult>
 {
     private readonly List<StockLifecycleHoldAttempt> _holds = [];
+    private readonly List<StockLifecycleReleaseAttempt> _releases = [];
 
     public StockLifecycleResult? NextResult { get; set; }
 
     public IReadOnlyList<StockLifecycleHoldAttempt> Holds => _holds;
+
+    public IReadOnlyList<StockLifecycleReleaseAttempt> Releases => _releases;
 
     public Task<StockLifecycleResult> Handle(
         HoldOrderAttemptStockCommand request,
@@ -1594,6 +1621,14 @@ internal sealed class TestStockLifecycleHandler(TimeProvider timeProvider)
         }
 
         return Task.FromResult(result);
+    }
+
+    public Task<StockLifecycleResult> Handle(
+        ReleaseOrderAttemptStockCommand request,
+        CancellationToken cancellationToken)
+    {
+        _releases.Add(new StockLifecycleReleaseAttempt(request.OrderId));
+        return Task.FromResult(StockLifecycleResult.Succeeded([]));
     }
 }
 

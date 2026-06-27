@@ -144,6 +144,37 @@ public sealed class OrderStockAllocationStorageTests
         Assert.NotNull(released.ReleasedAt);
         Assert.Equal(5, await app.GetStockQuantityAsync(item.VariantId));
     }
+
+    [Fact]
+    public async Task Cleanup_releases_held_allocations_only_after_hold_expiry_plus_orphan_buffer()
+    {
+        await using var app = new ProductCatalogStockTestApp(
+            orphanHoldReleaseBuffer: TimeSpan.FromMinutes(5));
+        var item = await app.SeedCatalogItemAsync(stockQuantity: 5);
+        var orderId = Guid.NewGuid();
+        var sessionKey = $"order:{orderId}";
+
+        await app.Stock.ReserveStockAsync(
+            sessionKey,
+            [(item.VariantId, 2)],
+            TimeSpan.FromMinutes(-4));
+
+        var beforeBuffer = await app.Stock.CleanupExpiredReservationsAsync();
+
+        Assert.Equal(0, beforeBuffer);
+        Assert.Equal(OrderStockAllocationState.Held, await app.GetAllocationStateAsync(orderId));
+        Assert.Equal(3, await app.GetStockQuantityAsync(item.VariantId));
+
+        var allocation = await app.Db.OrderStockAllocations.SingleAsync();
+        allocation.HoldExpiresAt = DateTime.UtcNow.AddMinutes(-6);
+        await app.Db.SaveChangesAsync();
+
+        var afterBuffer = await app.Stock.CleanupExpiredReservationsAsync();
+
+        Assert.Equal(1, afterBuffer);
+        Assert.Equal(OrderStockAllocationState.Released, await app.GetAllocationStateAsync(orderId));
+        Assert.Equal(5, await app.GetStockQuantityAsync(item.VariantId));
+    }
 }
 
 internal sealed class ProductCatalogStockTestApp : IAsyncDisposable
@@ -151,7 +182,8 @@ internal sealed class ProductCatalogStockTestApp : IAsyncDisposable
     private readonly SqliteConnection _connection;
     private readonly ProductCatalogDbContext _db;
 
-    public ProductCatalogStockTestApp()
+    public ProductCatalogStockTestApp(
+        TimeSpan? orphanHoldReleaseBuffer = null)
     {
         _connection = new SqliteConnection("Data Source=:memory:");
         _connection.Open();
@@ -164,7 +196,13 @@ internal sealed class ProductCatalogStockTestApp : IAsyncDisposable
         _db.Database.EnsureCreated();
         Stock = new StockReservationService(
             _db,
-            NullLogger<StockReservationService>.Instance);
+            NullLogger<StockReservationService>.Instance,
+            orphanHoldReleaseBuffer.HasValue
+                ? Microsoft.Extensions.Options.Options.Create(new StockLifecycleOptions
+                {
+                    OrphanHoldReleaseBuffer = orphanHoldReleaseBuffer.Value
+                })
+                : null);
     }
 
     public ProductCatalogDbContext Db => _db;
@@ -223,6 +261,14 @@ internal sealed class ProductCatalogStockTestApp : IAsyncDisposable
         return await _db.Variants
             .Where(v => v.Id == variantId)
             .Select(v => v.StockQuantity)
+            .SingleAsync();
+    }
+
+    public async Task<OrderStockAllocationState> GetAllocationStateAsync(Guid orderId)
+    {
+        return await _db.OrderStockAllocations
+            .Where(allocation => allocation.OrderId == orderId)
+            .Select(allocation => allocation.State)
             .SingleAsync();
     }
 

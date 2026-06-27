@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ProductCatalog.Data;
 using ProductCatalog.Products.Models;
 
@@ -7,7 +8,8 @@ namespace ProductCatalog.Products.Services;
 
 public class StockReservationService(
     ProductCatalogDbContext db,
-    ILogger<StockReservationService> logger) : IStockReservationService
+    ILogger<StockReservationService> logger,
+    IOptions<StockLifecycleOptions>? stockLifecycleOptions = null) : IStockReservationService
 {
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(5);
     private const string OrderSessionPrefix = "order:";
@@ -224,11 +226,13 @@ public class StockReservationService(
     public async Task<int> CleanupExpiredReservationsAsync(CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
+        var orphanReleaseCutoff = now - (stockLifecycleOptions?.Value.OrphanHoldReleaseBuffer
+            ?? new StockLifecycleOptions().OrphanHoldReleaseBuffer);
 
         var expiredAllocations = await db.OrderStockAllocations
             .Where(r => r.State == OrderStockAllocationState.Held
                 && r.HoldExpiresAt.HasValue
-                && r.HoldExpiresAt <= now)
+                && r.HoldExpiresAt <= orphanReleaseCutoff)
             .ToListAsync(ct);
 
         if (expiredAllocations.Count == 0)

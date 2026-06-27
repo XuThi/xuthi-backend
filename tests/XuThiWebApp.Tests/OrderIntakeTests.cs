@@ -111,7 +111,7 @@ public sealed class OrderIntakeTests
         Assert.Equal(cancelledAt, order.CancelledAt);
         Assert.Equal("Customer requested cancellation", order.CancellationReason);
 
-        var release = Assert.Single(app.StockReleases);
+        var release = Assert.Single(app.LegacyStockReleases);
         Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
         var restore = Assert.Single(app.StockRestores);
         Assert.Equal(checkout.OrderId, restore.OrderId);
@@ -422,8 +422,7 @@ public sealed class OrderIntakeTests
         Assert.Null(order.CreatedOrderAt);
         Assert.Null(order.PaidAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        AssertOnlyLifecycleStockRelease(app, checkout.OrderId);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -470,8 +469,7 @@ public sealed class OrderIntakeTests
         Assert.Equal("Failed", order.PaymentStatus);
         Assert.Equal(now.UtcDateTime, order.CancelledAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        AssertOnlyLifecycleStockRelease(app, checkout.OrderId);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -583,8 +581,7 @@ public sealed class OrderIntakeTests
         Assert.Null(order.CreatedOrderAt);
         Assert.Null(order.PaidAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        AssertOnlyLifecycleStockRelease(app, checkout.OrderId);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -2174,5 +2171,14 @@ public sealed class OrderIntakeTests
             PaymentMethod = PaymentMethod.BankTransfer,
             CreatedOrderAt = new DateTime(2026, 6, 24, 9, 0, 0, DateTimeKind.Utc)
         };
+    }
+
+    private static void AssertOnlyLifecycleStockRelease(
+        CommerceTestApp app,
+        Guid orderId)
+    {
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(orderId, release.OrderId);
+        Assert.Empty(app.LegacyStockReleases);
     }
 }

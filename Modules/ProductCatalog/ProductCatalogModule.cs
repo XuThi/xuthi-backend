@@ -23,6 +23,8 @@ public static class ProductCatalogModule
             options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
         builder.EnrichNpgsqlDbContext<ProductCatalogDbContext>();
+        builder.Services.Configure<StockLifecycleOptions>(
+            builder.Configuration.GetSection("ProductCatalog:StockLifecycle"));
         builder.Services.AddScoped<ICloudinaryMediaService, CloudinaryMediaService>();
         builder.Services.AddScoped<IStockReservationService, StockReservationService>();
         builder.Services.AddHostedService<StockReservationCleanupService>();

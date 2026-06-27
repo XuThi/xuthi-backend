@@ -8,6 +8,9 @@ public record HoldOrderAttemptStockCommand(
     IReadOnlyList<StockLifecycleLine> Lines,
     DateTime HoldExpiresAt) : ICommand<StockLifecycleResult>, ISkipTransaction;
 
+public record ReleaseOrderAttemptStockCommand(Guid OrderId)
+    : ICommand<StockLifecycleResult>, ISkipTransaction;
+
 public record StockLifecycleLine(Guid ProductVariantId, int Quantity);
 
 public record StockLifecycleResult(
@@ -85,6 +88,12 @@ public record StockLifecycleConflictDetail(
     DateTime? ExistingHoldExpiresAt);
 
 public record OrderStockHeld(
+    Guid OrderId,
+    IReadOnlyList<StockLifecycleLine> Lines,
+    DateTime OccurredAt,
+    string IdempotencyKey);
+
+public record OrderStockHoldReleased(
     Guid OrderId,
     IReadOnlyList<StockLifecycleLine> Lines,
     DateTime OccurredAt,
