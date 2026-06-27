@@ -53,9 +53,6 @@ public class CustomerOrder : Aggregate<Guid>
     public DateTime? PaymentWindowExpiresAt { get; set; }
     public DateTime? PaymentSettlementGraceEndsAt { get; set; }
     
-    // Stock reservation session key
-    public string? ReservationSessionKey { get; set; }
-    
     // Navigation
     public List<OrderItem> Items { get; set; } = [];
 

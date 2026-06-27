@@ -2,7 +2,7 @@ using ProductCatalog.Products.Models;
 
 namespace ProductCatalog.Products.Services;
 
-public interface IStockReservationService
+internal interface IStockReservationService
 {
     /// <summary>
     /// Legacy-compatible stock hold facade. Stores held Order Stock Allocations and returns allocation IDs.

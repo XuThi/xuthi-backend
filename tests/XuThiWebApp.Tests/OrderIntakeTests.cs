@@ -114,8 +114,6 @@ public sealed class OrderIntakeTests
         var restore = Assert.Single(app.StockLifecycleRestores);
         Assert.Equal(checkout.OrderId, restore.OrderId);
         Assert.Empty(app.StockLifecycleReleases);
-        Assert.Empty(app.LegacyStockReleases);
-        Assert.Empty(app.StockRestores);
 
         var outcome = Assert.Single(app.CustomerOrderOutcomeEvents);
         Assert.Equal(CustomerOrderOutcome.Cancelled, outcome.Outcome);
@@ -166,7 +164,6 @@ public sealed class OrderIntakeTests
         Assert.Equal(returnedAt, outcome.OccurredAt);
         Assert.Equal(checkout.OrderId, outcome.OrderId);
         Assert.Empty(app.StockLifecycleRestores);
-        Assert.Empty(app.StockRestores);
     }
 
     [Fact]
@@ -278,10 +275,6 @@ public sealed class OrderIntakeTests
         Assert.Equal(now.UtcDateTime, order.PaidAt);
         Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
 
-        var confirmation = Assert.Single(app.StockConfirmations);
-        Assert.Equal($"order:{checkout.OrderId}", confirmation.SessionKey);
-        Assert.Equal(checkout.OrderId, confirmation.OrderId);
-
         var lifecycleCommit = Assert.Single(app.StockLifecycleCommits);
         Assert.Equal(checkout.OrderId, lifecycleCommit.OrderId);
         Assert.Equal(StockLifecycleExpectedPriorState.Held, lifecycleCommit.ExpectedPriorState);
@@ -338,7 +331,7 @@ public sealed class OrderIntakeTests
         var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
         Assert.Equal(now.UtcDateTime, order.CreatedOrderAt);
         Assert.Equal(now.UtcDateTime, order.PaidAt);
-        Assert.Single(app.StockConfirmations);
+        Assert.Single(app.StockLifecycleCommits);
         Assert.Single(app.CreatedOrderEvents);
     }
 
@@ -530,8 +523,8 @@ public sealed class OrderIntakeTests
         Assert.Null(order.CreatedOrderAt);
         Assert.Null(order.PaidAt);
 
-        Assert.Single(app.StockReleases);
-        Assert.Empty(app.StockConfirmations);
+        Assert.Single(app.StockLifecycleReleases);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -598,7 +591,7 @@ public sealed class OrderIntakeTests
         Assert.Equal(VoucherUsageStatus.Released, usage.Status);
         Assert.NotNull(usage.ReleasedAt);
 
-        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -656,7 +649,7 @@ public sealed class OrderIntakeTests
         var usage = Assert.Single(audit.Usages);
         Assert.Equal(VoucherUsageStatus.Held, usage.Status);
 
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleReleases);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -714,7 +707,7 @@ public sealed class OrderIntakeTests
         var heldUsage = Assert.Single(heldAudit.Usages);
         Assert.Equal(VoucherUsageStatus.Held, heldUsage.Status);
 
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleReleases);
         Assert.Empty(app.CreatedOrderEvents);
 
         app.TimeProvider.Advance(TimeSpan.FromMinutes(6).Add(TimeSpan.FromSeconds(1)));
@@ -725,8 +718,8 @@ public sealed class OrderIntakeTests
         Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), expiredOrder.CancelledAt);
         Assert.Null(expiredOrder.CreatedOrderAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(checkout.OrderId, release.OrderId);
 
         var releasedAudit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var releasedUsage = Assert.Single(releasedAudit.Usages);
@@ -775,8 +768,8 @@ public sealed class OrderIntakeTests
         Assert.Null(order.CancelledAt);
         Assert.Null(order.CancellationReason);
 
-        Assert.Empty(app.StockReleases);
-        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.StockLifecycleReleases);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -827,8 +820,8 @@ public sealed class OrderIntakeTests
         Assert.Null(order.CancelledAt);
         Assert.Null(order.CancellationReason);
 
-        Assert.Single(app.StockConfirmations);
-        Assert.Empty(app.StockReleases);
+        Assert.Single(app.StockLifecycleCommits);
+        Assert.Empty(app.StockLifecycleReleases);
         Assert.Single(app.CreatedOrderEvents);
     }
 
@@ -882,8 +875,8 @@ public sealed class OrderIntakeTests
         Assert.Contains("Quá thời gian", cancelled.CancellationReason);
         Assert.DoesNotContain("Frontend", cancelled.CancellationReason);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(checkout.OrderId, release.OrderId);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -938,7 +931,7 @@ public sealed class OrderIntakeTests
                 Reason: "Frontend cancel redirect")));
 
         Assert.Contains("settlement grace", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleReleases);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -962,8 +955,8 @@ public sealed class OrderIntakeTests
 
         Assert.True(webhook.Accepted);
         Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
-        Assert.Empty(app.StockConfirmations);
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleCommits);
+        Assert.Empty(app.StockLifecycleReleases);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -1003,8 +996,8 @@ public sealed class OrderIntakeTests
         Assert.True(webhook.Accepted);
         Assert.Equal([rawPayload], app.VerifiedWebhookPayloads);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(checkout.OrderId, release.OrderId);
 
         var order = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
         Assert.Equal("Cancelled", order.Status);
@@ -1052,7 +1045,7 @@ public sealed class OrderIntakeTests
         var waitingOrder = await app.Sender.Send(new GetOrderQuery(Id: checkout.OrderId));
         Assert.Equal("Pending", waitingOrder.Status);
         Assert.Equal("Pending", waitingOrder.PaymentStatus);
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleReleases);
 
         app.TimeProvider.Advance(TimeSpan.FromSeconds(31));
 
@@ -1067,8 +1060,8 @@ public sealed class OrderIntakeTests
         Assert.Equal(now.UtcDateTime.AddMinutes(6).AddSeconds(1), expiredOrder.CancelledAt);
         Assert.Null(expiredOrder.CreatedOrderAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(checkout.OrderId, release.OrderId);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -1118,8 +1111,8 @@ public sealed class OrderIntakeTests
         Assert.Contains("Quá thời gian", order.CancellationReason);
         Assert.Null(order.CreatedOrderAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(checkout.OrderId, release.OrderId);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -1173,7 +1166,7 @@ public sealed class OrderIntakeTests
         Assert.Equal(checkout.OrderId, summary.Id);
         Assert.Equal("Pending", summary.Status);
         Assert.Equal("Pending", summary.PaymentStatus);
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleReleases);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -1222,9 +1215,9 @@ public sealed class OrderIntakeTests
         Assert.Null(order.PaidAt);
         Assert.Null(order.CreatedOrderAt);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{checkout.OrderId}", release.SessionKey);
-        Assert.Empty(app.StockConfirmations);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(checkout.OrderId, release.OrderId);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -1335,10 +1328,10 @@ public sealed class OrderIntakeTests
         var paymentAttempt = Assert.Single(app.PaymentLinkAttempts);
         Assert.Equal(expectedWindowEnd, paymentAttempt.ExpiresAt.UtcDateTime);
 
-        var stockHold = Assert.Single(app.StockReservations);
-        Assert.Equal($"order:{checkout.OrderId}", stockHold.SessionKey);
+        var stockHold = Assert.Single(app.StockLifecycleHolds);
+        Assert.Equal(checkout.OrderId, stockHold.OrderId);
         Assert.Equal(TimeSpan.FromMinutes(6), stockHold.Ttl);
-        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.StockLifecycleCommits);
 
         var lifecycleHold = Assert.Single(app.StockLifecycleHolds);
         Assert.Equal(checkout.OrderId, lifecycleHold.OrderId);
@@ -1393,11 +1386,11 @@ public sealed class OrderIntakeTests
 
         Assert.Contains("PayOS unavailable", ex.Message);
 
-        var stockHold = Assert.Single(app.StockReservations);
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal(stockHold.SessionKey, release.SessionKey);
+        var stockHold = Assert.Single(app.StockLifecycleHolds);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(stockHold.OrderId, release.OrderId);
 
-        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+        var orderId = stockHold.OrderId;
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             app.Sender.Send(new GetOrderQuery(Id: orderId)));
 
@@ -1443,8 +1436,8 @@ public sealed class OrderIntakeTests
                 CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("Insufficient stock", ex.Message);
-        Assert.Empty(app.StockReservations);
-        Assert.Empty(app.StockConfirmations);
+        Assert.Empty(app.StockLifecycleHolds);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.PaymentLinkAttempts);
 
         var orders = await app.Sender.Send(new GetOrdersQuery(PageSize: 100));
@@ -1489,7 +1482,7 @@ public sealed class OrderIntakeTests
                 CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("no longer available", ex.Message);
-        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.StockLifecycleHolds);
         Assert.Empty(app.PaymentLinkAttempts);
         Assert.Empty((await app.Sender.Send(new GetOrdersQuery(PageSize: 100))).Orders);
     }
@@ -1533,7 +1526,7 @@ public sealed class OrderIntakeTests
                 CancelUrl: "https://shop.example/checkout/cancel"), app.DefaultExternalUserId)));
 
         Assert.Contains("not compatible", ex.Message);
-        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.StockLifecycleHolds);
         Assert.Empty(app.PaymentLinkAttempts);
         Assert.Empty((await app.Sender.Send(new GetOrdersQuery(PageSize: 100))).Orders);
     }
@@ -1585,11 +1578,11 @@ public sealed class OrderIntakeTests
         var cancellation = Assert.Single(app.PaymentLinkCancellations);
         Assert.Equal(123456789, cancellation.OrderCode);
 
-        var stockHold = Assert.Single(app.StockReservations);
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal(stockHold.SessionKey, release.SessionKey);
+        var stockHold = Assert.Single(app.StockLifecycleHolds);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(stockHold.OrderId, release.OrderId);
 
-        var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+        var orderId = stockHold.OrderId;
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             app.Sender.Send(new GetOrderQuery(Id: orderId)));
 
@@ -1652,18 +1645,18 @@ public sealed class OrderIntakeTests
 
         if (paymentMethod == PaymentMethod.PayOS)
         {
-            var stockHold = Assert.Single(app.StockReservations);
-            var release = Assert.Single(app.StockReleases);
-            Assert.Equal(stockHold.SessionKey, release.SessionKey);
+            var stockHold = Assert.Single(app.StockLifecycleHolds);
+            var release = Assert.Single(app.StockLifecycleReleases);
+            Assert.Equal(stockHold.OrderId, release.OrderId);
 
-            var orderId = Guid.Parse(stockHold.SessionKey["order:".Length..]);
+            var orderId = stockHold.OrderId;
             await Assert.ThrowsAsync<KeyNotFoundException>(() =>
                 app.SendInNewScopeAsync(new GetOrderQuery(Id: orderId)));
         }
         else
         {
-            Assert.Empty(app.StockReservations);
-            Assert.Empty(app.StockReleases);
+            Assert.Empty(app.StockLifecycleHolds);
+            Assert.Empty(app.StockLifecycleReleases);
             Assert.Empty(app.StockLifecycleCommits);
         }
 
@@ -1718,8 +1711,8 @@ public sealed class OrderIntakeTests
         Assert.Equal(first.PaymentUrl, retry.PaymentUrl);
 
         Assert.Single(app.PaymentLinkAttempts);
-        Assert.Single(app.StockReservations);
-        Assert.Empty(app.StockConfirmations);
+        Assert.Single(app.StockLifecycleHolds);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -1762,8 +1755,8 @@ public sealed class OrderIntakeTests
         var paymentState = await app.GetOrderPaymentStateAsync(first.OrderId);
         Assert.Equal("https://pay.example/checkout", paymentState.PaymentLinkUrl);
         Assert.Single(app.PaymentLinkAttempts);
-        Assert.Single(app.StockReservations);
-        Assert.Empty(app.StockConfirmations);
+        Assert.Single(app.StockLifecycleHolds);
+        Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty(app.CreatedOrderEvents);
     }
 
@@ -1813,8 +1806,8 @@ public sealed class OrderIntakeTests
         Assert.Contains("fresh Cart Quote", ex.Message);
         Assert.Single(app.PaymentLinkAttempts);
 
-        var release = Assert.Single(app.StockReleases);
-        Assert.Equal($"order:{first.OrderId}", release.SessionKey);
+        var release = Assert.Single(app.StockLifecycleReleases);
+        Assert.Equal(first.OrderId, release.OrderId);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
         var usage = Assert.Single(audit.Usages);
@@ -1863,7 +1856,7 @@ public sealed class OrderIntakeTests
         Assert.Equal(first.Status, retry.Status);
         Assert.Null(retry.PaymentUrl);
 
-        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.StockLifecycleHolds);
         var lifecycleCommit = Assert.Single(app.StockLifecycleCommits);
         Assert.Equal(first.OrderId, lifecycleCommit.OrderId);
         Assert.Equal(StockLifecycleExpectedPriorState.None, lifecycleCommit.ExpectedPriorState);
@@ -1904,7 +1897,7 @@ public sealed class OrderIntakeTests
         Assert.Null(checkout.PaymentUrl);
         Assert.Empty(app.PaymentLinkAttempts);
 
-        Assert.Empty(app.StockReservations);
+        Assert.Empty(app.StockLifecycleHolds);
         var lifecycleCommit = Assert.Single(app.StockLifecycleCommits);
         Assert.Equal(checkout.OrderId, lifecycleCommit.OrderId);
         Assert.Equal(StockLifecycleExpectedPriorState.None, lifecycleCommit.ExpectedPriorState);
@@ -1952,8 +1945,8 @@ public sealed class OrderIntakeTests
 
         Assert.Contains("Insufficient stock", ex.Message);
 
-        Assert.Empty(app.StockReservations);
-        Assert.Empty(app.StockReleases);
+        Assert.Empty(app.StockLifecycleHolds);
+        Assert.Empty(app.StockLifecycleReleases);
         Assert.Empty(app.StockLifecycleCommits);
         Assert.Empty((await app.Sender.Send(new GetOrdersQuery(PageSize: 100))).Orders);
 
@@ -2057,8 +2050,7 @@ public sealed class OrderIntakeTests
 
         Assert.Contains("order save failed", ex.Message);
 
-        var restore = Assert.Single(app.StockRestores);
-        Assert.Equal($"order:{checkout.OrderId}", restore.SessionKey);
+        var restore = Assert.Single(app.StockLifecycleRestores);
         Assert.Equal(checkout.OrderId, restore.OrderId);
 
         var audit = await app.Sender.Send(new GetVoucherUsageAuditQuery(voucherId));
@@ -2204,6 +2196,5 @@ public sealed class OrderIntakeTests
     {
         var release = Assert.Single(app.StockLifecycleReleases);
         Assert.Equal(orderId, release.OrderId);
-        Assert.Empty(app.LegacyStockReleases);
     }
 }

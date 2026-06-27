@@ -42,7 +42,6 @@ using ProductCatalog.Brands.Models;
 using ProductCatalog.Categories.Models;
 using ProductCatalog.Data;
 using ProductCatalog.Products.Models;
-using ProductCatalog.Products.Services;
 using Promotion;
 using Promotion.Data;
 using Promotion.SaleCampaigns.Models;
@@ -1112,7 +1111,6 @@ internal sealed class CommerceTestApp : IAsyncDisposable
             ?? throw new InvalidOperationException("CartQuoteService was not found.");
         services.AddScoped(cartQuoteServiceType);
 
-        services.AddScoped<IStockReservationService, TestStockReservationService>();
         services.AddScoped<TestStockLifecycleHandler>();
         services.AddScoped<IRequestHandler<HoldOrderAttemptStockCommand, StockLifecycleResult>>(sp =>
             sp.GetRequiredService<TestStockLifecycleHandler>());
@@ -1144,65 +1142,6 @@ internal sealed class CommerceTestApp : IAsyncDisposable
 
     public IReadOnlyList<string> VerifiedWebhookPayloads
         => ((TestPaymentService)_scope.ServiceProvider.GetRequiredService<IPaymentService>()).VerifiedWebhookPayloads;
-
-    public IReadOnlyList<StockConfirmation> StockConfirmations
-    {
-        get
-        {
-            var legacy = ((TestStockReservationService)_scope.ServiceProvider
-                    .GetRequiredService<IStockReservationService>())
-                .Confirmations;
-            var lifecycle = _scope.ServiceProvider
-                .GetRequiredService<TestStockLifecycleHandler>()
-                .Commits
-                .Select(commit => new StockConfirmation($"order:{commit.OrderId}", commit.OrderId));
-
-            return legacy.Concat(lifecycle).ToList();
-        }
-    }
-
-    public IReadOnlyList<StockRelease> StockReleases
-    {
-        get
-        {
-            var legacy = ((TestStockReservationService)_scope.ServiceProvider
-                    .GetRequiredService<IStockReservationService>())
-                .Releases;
-            var lifecycle = _scope.ServiceProvider
-                .GetRequiredService<TestStockLifecycleHandler>()
-                .Releases
-                .Select(release => new StockRelease($"order:{release.OrderId}"));
-
-            return legacy.Concat(lifecycle).ToList();
-        }
-    }
-
-    public IReadOnlyList<StockRelease> LegacyStockReleases
-        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Releases;
-
-    public IReadOnlyList<StockRestore> StockRestores
-        => ((TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>()).Restores;
-
-    public IReadOnlyList<StockReservationAttempt> StockReservations
-    {
-        get
-        {
-            var legacy = ((TestStockReservationService)_scope.ServiceProvider
-                    .GetRequiredService<IStockReservationService>())
-                .Reservations;
-            var lifecycle = _scope.ServiceProvider
-                .GetRequiredService<TestStockLifecycleHandler>()
-                .Holds
-                .Select(hold => new StockReservationAttempt(
-                    $"order:{hold.OrderId}",
-                    hold.Lines
-                        .Select(line => new StockReservationItem(line.ProductVariantId, line.Quantity))
-                        .ToList(),
-                    hold.Ttl));
-
-            return legacy.Concat(lifecycle).ToList();
-        }
-    }
 
     public IReadOnlyList<StockLifecycleHoldAttempt> StockLifecycleHolds
         => _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>().Holds;
@@ -1365,22 +1304,10 @@ internal sealed class CommerceTestApp : IAsyncDisposable
         await promotion.SaveChangesAsync();
     }
 
-    public void OnReserveStock(Func<CancellationToken, Task> onReserve)
-    {
-        var stockReservation = (TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>();
-        stockReservation.OnReserveAsync = onReserve;
-    }
-
     public void OnStockLifecycleHold(Func<CancellationToken, Task> onHold)
     {
         var stockLifecycle = _scope.ServiceProvider.GetRequiredService<TestStockLifecycleHandler>();
         stockLifecycle.OnHoldAsync = onHold;
-    }
-
-    public void OnConfirmStock(Func<CancellationToken, Task> onConfirm)
-    {
-        var stockReservation = (TestStockReservationService)_scope.ServiceProvider.GetRequiredService<IStockReservationService>();
-        stockReservation.OnConfirmAsync = onConfirm;
     }
 
     public void SetNextStockLifecycleHoldResult(StockLifecycleResult result)
@@ -1587,16 +1514,6 @@ internal sealed record OrderState(
     string PaymentStatus,
     DateTime? CreatedOrderAt);
 
-internal sealed record StockConfirmation(string SessionKey, Guid OrderId);
-internal sealed record StockRelease(string SessionKey);
-internal sealed record StockRestore(string SessionKey, Guid OrderId);
-internal sealed record StockReservationAttempt(
-    string SessionKey,
-    IReadOnlyList<StockReservationItem> Items,
-    TimeSpan? Ttl);
-
-internal sealed record StockReservationItem(Guid VariantId, int Quantity);
-
 internal sealed record StockLifecycleHoldAttempt(
     Guid OrderId,
     IReadOnlyList<StockLifecycleLine> Lines,
@@ -1745,64 +1662,6 @@ internal static class TestServiceCollectionExtensions
             options.ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning));
             configure?.Invoke(sp, options);
         });
-    }
-}
-
-internal sealed class TestStockReservationService : IStockReservationService
-{
-    private readonly List<StockReservationAttempt> _reservations = [];
-    private readonly List<StockConfirmation> _confirmations = [];
-    private readonly List<StockRelease> _releases = [];
-    private readonly List<StockRestore> _restores = [];
-
-    public Func<CancellationToken, Task>? OnReserveAsync { get; set; }
-    public Func<CancellationToken, Task>? OnConfirmAsync { get; set; }
-    public IReadOnlyList<StockReservationAttempt> Reservations => _reservations;
-    public IReadOnlyList<StockConfirmation> Confirmations => _confirmations;
-    public IReadOnlyList<StockRelease> Releases => _releases;
-    public IReadOnlyList<StockRestore> Restores => _restores;
-
-    public async Task<List<Guid>> ReserveStockAsync(
-        string sessionKey,
-        List<(Guid VariantId, int Quantity)> items,
-        TimeSpan? ttl = null,
-        CancellationToken ct = default)
-    {
-        if (OnReserveAsync is not null)
-            await OnReserveAsync(ct);
-
-        _reservations.Add(new StockReservationAttempt(
-            sessionKey,
-            items.Select(item => new StockReservationItem(item.VariantId, item.Quantity)).ToList(),
-            ttl));
-
-        return items.Select(_ => Guid.NewGuid()).ToList();
-    }
-
-    public Task ConfirmReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
-    {
-        if (OnConfirmAsync is not null)
-            return OnConfirmAsync(ct);
-
-        _confirmations.Add(new StockConfirmation(sessionKey, orderId));
-        return Task.CompletedTask;
-    }
-
-    public Task ReleaseReservationsAsync(string sessionKey, CancellationToken ct = default)
-    {
-        _releases.Add(new StockRelease(sessionKey));
-        return Task.CompletedTask;
-    }
-
-    public Task RestoreConfirmedReservationsAsync(string sessionKey, Guid orderId, CancellationToken ct = default)
-    {
-        _restores.Add(new StockRestore(sessionKey, orderId));
-        return Task.CompletedTask;
-    }
-
-    public Task<int> CleanupExpiredReservationsAsync(CancellationToken ct = default)
-    {
-        return Task.FromResult(0);
     }
 }
 

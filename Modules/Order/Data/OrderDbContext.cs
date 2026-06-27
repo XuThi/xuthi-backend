@@ -34,6 +34,7 @@ public class OrderDbContext(
                 .IsUnique()
                 .HasFilter("\"PayOsOrderCode\" IS NOT NULL");
             entity.Property(e => e.CustomerId).IsRequired();
+            entity.Property<string?>("ReservationSessionKey");
 
             // Base class property mappings
             entity.Ignore(e => e.CreatedBy);

@@ -6,7 +6,7 @@ using ProductCatalog.Products.Models;
 
 namespace ProductCatalog.Products.Services;
 
-public class StockReservationService(
+internal class StockReservationService(
     ProductCatalogDbContext db,
     ILogger<StockReservationService> logger,
     IOptions<StockLifecycleOptions>? stockLifecycleOptions = null) : IStockReservationService

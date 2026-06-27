@@ -9,7 +9,7 @@ namespace ProductCatalog.Products.BackgroundServices;
 /// Periodically releases expired stock allocations (TTL = 5 minutes).
 /// Runs every 30 seconds.
 /// </summary>
-public class StockReservationCleanupService(
+internal class StockReservationCleanupService(
     IServiceScopeFactory scopeFactory,
     ILogger<StockReservationCleanupService> logger) : BackgroundService
 {

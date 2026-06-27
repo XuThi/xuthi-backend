@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Order.Orders.Events;
 using Order.Orders.Features.CalculateShipping;
 using Order.Orders.Services;
-using ProductCatalog.Products.Services;
 using Promotion.Vouchers.Features.ManageVoucherUsage;
 
 namespace Order.Orders.OrderIntake;
@@ -109,7 +108,6 @@ public static class OrderIntakeServiceCollectionExtensions
 
 internal class OrderIntake(
     OrderDbContext orderDb,
-    IStockReservationService stockReservation,
     IPaymentService paymentService,
     ISender sender,
     TimeProvider timeProvider,
@@ -224,9 +222,6 @@ internal class OrderIntake(
             order.PaymentSettlementGraceEndsAt = paymentSettlementGraceEndsAt!.Value.UtcDateTime;
         }
 
-        var sessionKey = $"order:{order.Id}";
-        order.ReservationSessionKey = sessionKey;
-
         var stockLines = quote.Items
             .Select(i => new StockLifecycleLine(i.VariantId, i.Quantity))
             .ToList();
@@ -316,10 +311,7 @@ internal class OrderIntake(
 
                 if (stockConfirmed)
                 {
-                    await stockReservation.RestoreConfirmedReservationsAsync(
-                        sessionKey,
-                        order.Id,
-                        cancellationToken);
+                    await RestoreCreatedOrderStockAsync(order, cancellationToken);
                 }
                 else
                 {
@@ -514,12 +506,9 @@ internal class OrderIntake(
             if (voucherFinalized)
                 await ReleaseVoucherHoldAsync(order, cancellationToken);
 
-            if (stockConfirmed && !string.IsNullOrEmpty(order.ReservationSessionKey))
+            if (stockConfirmed)
             {
-                await stockReservation.RestoreConfirmedReservationsAsync(
-                    order.ReservationSessionKey,
-                    order.Id,
-                    cancellationToken);
+                await RestoreCreatedOrderStockAsync(order, cancellationToken);
             }
 
             await ReloadOrderAttemptAsync(order, cancellationToken);
@@ -679,6 +668,16 @@ internal class OrderIntake(
             EnsureStockLifecycleSuccess(result, "release this Order Attempt's Stock Hold");
             return;
         }
+    }
+
+    private async Task RestoreCreatedOrderStockAsync(
+        CustomerOrder order,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new RestoreCreatedOrderStockCommand(order.Id),
+            cancellationToken);
+        EnsureStockLifecycleSuccess(result, "restore this Created Order's Stock Commitment");
     }
 
     private static void EnsureStockLifecycleSuccess(
